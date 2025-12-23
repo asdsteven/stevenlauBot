@@ -117,6 +117,7 @@ STEVENLAU.StevenlauBot.prototype.cavMeat = function(cav) {
 STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
 {
     if (this.state == 0) {
+        if (this.gameState.getTimeElapsed() < 3000) return;
         if (this.gameState.getPlayerCiv() != "han") {
             this.chat("stevenlauBot only works for Han.");
             this.state = -1;
@@ -128,7 +129,7 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
         const [tree, fruit, meat] = this.dropsiteTreeFruitMeat(cc);
         for (const unit of [...women, ...crossbowmen, ...spearmen, minister]) {
             if (API3.SquareVectorDistance(tree.position(), unit.position()) < pointStructureDistanceSquared(tree.position(), cc)) {
-                unit.gather(target);
+                unit.gather(tree);
             } else {
                 unit.garrison(cc);
                 this.teleporting.set(unit.id(), [unit, tree]);
