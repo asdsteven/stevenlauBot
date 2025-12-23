@@ -1,0 +1,7 @@
+{
+    "name": "stevenlau Bot",
+    "description": "stevenlau Bot is a bot.",
+    "moduleName": "STEVENLAU",
+    "constructor": "StevenlauBot",
+    "useShared": true
+}
