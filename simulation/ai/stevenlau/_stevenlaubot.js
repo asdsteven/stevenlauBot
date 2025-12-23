@@ -117,7 +117,7 @@ STEVENLAU.StevenlauBot.prototype.cavMeat = function(cav) {
 STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
 {
     if (this.state == 0) {
-        if (this.gameState.getTimeElapsed() < 3000) return;
+        /* if (this.gameState.getTimeElapsed() < 1000) return; */
         if (this.gameState.getPlayerCiv() != "han") {
             this.chat("stevenlauBot only works for Han.");
             this.state = -1;
@@ -126,9 +126,13 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
         this.entities = this.firstEntities();
         this.teleporting = new Map();
         const {women, crossbowmen, spearmen, swordcav, minister, cc} = this.entities;
+        cc.train(this.gameState.getPlayerCiv(), "units/han/support_female_citizen", 6);
         const [tree, fruit, meat] = this.dropsiteTreeFruitMeat(cc);
+        this.fruit = fruit;
         for (const unit of [...women, ...crossbowmen, ...spearmen, minister]) {
-            if (API3.SquareVectorDistance(tree.position(), unit.position()) < pointStructureDistanceSquared(tree.position(), cc)) {
+            const teleportDist = pointStructureDistanceSquared(unit.position(), cc) +
+                                 pointStructureDistanceSquared(tree.position(), cc);
+            if (API3.SquareVectorDistance(tree.position(), unit.position()) < teleportDist) {
                 unit.gather(tree);
             } else {
                 unit.garrison(cc);
@@ -136,7 +140,9 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
             }
         }
         const chicken = this.cavMeat(swordcav);
-        if (API3.SquareVectorDistance(chicken.position(), swordcav.position()) < pointStructureDistanceSquared(meat.position(), cc)) {
+        const teleportDist = pointStructureDistanceSquared(swordcav.position(), cc) +
+                             pointStructureDistanceSquared(meat.position(), cc);
+        if (API3.SquareVectorDistance(chicken.position(), swordcav.position()) < teleportDist) {
             // Walk to chicken nearest to swordcav
             swordcav.gather(chicken);
         } else {
@@ -157,7 +163,10 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
             cc.unload(id);
             this.teleporting.delete(id);
         }
-        if (this.teleporting.size == 0) this.state = 2;
+        if (this.teleporting.size == 0) {
+            cc.setRallyPoint(this.fruit, "gather");
+            this.state = 2;
+        }
     } else if (this.state == 2) {
         const {women, crossbowmen, spearmen, swordcav, minister, cc} = this.entities;
         const [ , , meat] = this.dropsiteTreeFruitMeat(cc);
