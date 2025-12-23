@@ -125,17 +125,23 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function(gameState)
         this.entities = this.firstEntities();
         this.teleporting = new Map();
         const {women, crossbowmen, spearmen, swordcav, minister, cc} = this.entities;
-        const [tree, fruit, ] = this.dropsiteTreeFruitMeat(cc);
-        const chicken = this.cavMeat(swordcav);
-        const unitTargets = [[swordcav, chicken]];
-        [...women, ...crossbowmen, ...spearmen, minister].forEach(unit => unitTargets.push([unit, tree]));
-        for (const [unit, target] of unitTargets) {
-            if (API3.SquareVectorDistance(target.position(), unit.position()) < pointStructureDistanceSquared(target.position(), cc)) {
+        const [tree, fruit, meat] = this.dropsiteTreeFruitMeat(cc);
+        for (const unit of [...women, ...crossbowmen, ...spearmen, minister]) {
+            if (API3.SquareVectorDistance(tree.position(), unit.position()) < pointStructureDistanceSquared(tree.position(), cc)) {
                 unit.gather(target);
             } else {
                 unit.garrison(cc);
-                this.teleporting.set(unit.id(), [unit, target]);
+                this.teleporting.set(unit.id(), [unit, tree]);
             }
+        }
+        const chicken = this.cavMeat(swordcav);
+        if (API3.SquareVectorDistance(chicken.position(), swordcav.position()) < pointStructureDistanceSquared(meat.position(), cc)) {
+            // Walk to chicken nearest to swordcav
+            swordcav.gather(chicken);
+        } else {
+            // Teleport to chicken nearest to CC
+            swordcav.garrison(cc);
+            this.teleporting.set(swordcav.id(), [swordcav, meat]);
         }
         this.state = 1;
     } else if (this.state == 1) {
