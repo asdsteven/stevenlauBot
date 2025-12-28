@@ -278,7 +278,7 @@ STEVENLAU.StevenlauBot.prototype.firstEntities = function() {
 STEVENLAU.StevenlauBot.prototype.OnUpdate = function()
 {
     if (this.state == 0) {
-        /* if (this.gameState.getTimeElapsed() < 1000) return; */
+        if (this.gameState.getTimeElapsed() < 1000) return;
         if (this.gameState.getPlayerCiv() != "han") {
             this.chat("stevenlauBot only works for Han.");
             this.state = -1;
@@ -349,7 +349,7 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function()
                               house.position[0],
                               house.position[1],
                               this.entities.cc.angle());
-        if (house.builderDist.teleport < house.builderDist.walkDist) {
+        if (house.builderDist.teleport < house.builderDist.walk) {
             builders[1].garrison(this.entities.cc);
             this.teleporting.set(builders[1].id(), []);
             // Fill later when foundation is made
