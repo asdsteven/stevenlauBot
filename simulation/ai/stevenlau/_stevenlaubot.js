@@ -178,7 +178,7 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
             if (this.gameState.getPlayerCiv() != "han") {
                 throw "stevenlauBot only works for Han.";
             }
-            /* if (this.gameState.getTimeElapsed() < 1000) return; */
+            /* if (this.gameState.getTimeElapsed() < 2000) return 0; */
             return this.veryFirstMoments();
         },
         () => {
