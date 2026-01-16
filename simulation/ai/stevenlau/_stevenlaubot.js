@@ -9,14 +9,17 @@ STEVENLAU.StevenlauBot = function(settings)
 
 STEVENLAU.StevenlauBot.prototype = Object.create(API3.BaseAI.prototype);
 
-STEVENLAU.StevenlauBot.prototype.printGenericNames = function() {
-    const genericNames = new Map();
-    this.gameState.getEntities().forEach(ent => {
-        const name = ent.genericName();
-        genericNames.set(name, (genericNames.get(name) || 0) + 1);
-    });
-    genericNames.forEach(([name, count]) => this.chat(`${name}: ${count}`));
-};
+function minArg(f, xs) {
+    return xs.reduce((m, x) => f(x) < f(m) ? x : m, xs[0]);
+}
+
+function by(f) {
+    return (a, b) => f(a) - f(b);
+}
+
+function arrayRemove(y, xs) {
+    xs.splice(xs.findIndex(x => x == y), 1);
+}
 
 function sanitize(s) {
     return s.replace(/[\[\]]/g, '\\$&');
@@ -160,16 +163,6 @@ function clusterForests(trees) {
     };
 }
 
-STEVENLAU.StevenlauBot.prototype.runFSM = function()
-{
-    switch (this.FSM[this.FSMState]()) {
-        case 0: return 0;
-        case 1: this.FSMState++; return 0;
-        case 2: this.FSMState++; return this.FSM[this.FSMState]();
-        default: return 1;
-    }
-}
-
 STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
 {
     this.state = 0;
@@ -178,16 +171,18 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
             if (this.gameState.getPlayerCiv() != "han") {
                 throw "stevenlauBot only works for Han.";
             }
-            /* if (this.gameState.getTimeElapsed() < 2000) return 0; */
-            return this.veryFirstMoments();
+            this.chat(`player ${this.gameState.getPlayerID()}`);
+            /* if (this.gameState.getTimeElapsed() < 2000) return 1; */
+            return 1;
         },
+        () => this.veryFirstMoments(),
         () => {
             // Idle cavs go hunt
             const idleCavs = [];
             this.gameState.getOwnUnits().forEach(unit => {
-                if (!unit.isIdle()) return;
-                if (unit.genericName() != "Cavalry Swordsman") return;
-                idleCavs.push(unit);
+                if (unit.isIdle() && unit.hasClass("Cavalry")) {
+                    idleCavs.push(unit);
+                }
             });
             if (idleCavs.length > 0) {
                 let meat = null;
@@ -208,7 +203,12 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function()
 {
     if (this.state == -1) return;
     try {
-        this.state += this.FSMs[this.state]();
+        while (true) {
+            const x = this.FSMs[this.state]();
+            if (x == 0) break;
+            this.state += Math.floor(x);
+            if (x > 1) break;
+        }
     } catch (e) {
         this.chat(sanitize(`${e}`));
         this.state = -1;
