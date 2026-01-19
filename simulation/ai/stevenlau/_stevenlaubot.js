@@ -17,6 +17,10 @@ function by(f) {
     return (a, b) => f(a) - f(b);
 }
 
+function sum(xs) {
+    return xs.reduce((s, x) => s + x);
+}
+
 function arrayRemove(y, xs) {
     xs.splice(xs.findIndex(x => x == y), 1);
 }
@@ -168,6 +172,7 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
     this.state = 0;
     this.FSMs = [
         () => {
+            const x = new Promise(res => 0);
             if (this.gameState.getPlayerCiv() != "han") {
                 throw "stevenlauBot only works for Han.";
             }
@@ -176,6 +181,9 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
             return 1;
         },
         () => this.veryFirstMoments(),
+        () => this.p1Upgrades(),
+        /* () => this.p1Barracks(), */
+        /* () => this.p1Rush(), */
         () => {
             // Idle cavs go hunt
             const idleCavs = [];

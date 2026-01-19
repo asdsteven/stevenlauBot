@@ -1,8 +1,3 @@
-STEVENLAU.StevenlauBot.prototype.debug = function(s)
-{
-    this.chat(s);
-}
-
 STEVENLAU.StevenlauBot.prototype.veryFirstEntities = function()
 {
     // Loop once to cache all entities for analysis
@@ -102,11 +97,13 @@ function hanHousesBarracksAround(cc, cosa, sina, obstructs) {
     };
 }
 
-function findStorehouse(bucket, forest, cc, template) {
+function veryFirstStorehouses(bucket, forest, cc) {
     const [x, z] = [Math.round(forest.position[0] / 20), Math.round(forest.position[1] / 20)];
     const candidates = [];
     const weight = pos => {
-        return API3.SquareVectorDistance(pos, cc.position()) + 50 * API3.SquareVectorDistance(pos, forest.position);
+        const ccDist = API3.SquareVectorDistance(pos, cc.position());
+        const forestDist = API3.SquareVectorDistance(pos, forest.position);
+        return ccDist + 50 * forestDist;
     };
     for (let i = Math.max(0, x - 10); i <= x + 10; i++) {
         for (let j = Math.max(0, z - 10); j <= z + 10; j++) {
@@ -120,8 +117,7 @@ function findStorehouse(bucket, forest, cc, template) {
             });
         }
     }
-    candidates.sort(by(x => x.weight));
-    return findPlacement(candidates, template, 0);
+    return candidates.sort(by(x => x.weight));
 }
 
 function findPlacement(placements, template, angle) {
@@ -132,6 +128,7 @@ function findPlacement(placements, template, angle) {
     pos.SetYRotation(angle);
     for (const placement of placements) {
         pos.JumpTo(placement.position[0], placement.position[1]);
+        /* unknown error dunno why */
 	/* const result = cmpBuildRestrictions.CheckPlacement(); */
         /* if (result.success) return c; */
         /* chat(sanitize(JSON.stringify(result))); */
@@ -156,30 +153,17 @@ function veryFirstScout(minister, [x, z], [xx, zz]) {
     }
 }
 
-function pickFarmstead(houses, fruits, template, angle) {
-    houses.forEach(house => {
-        house.fruitDist = Math.min(...fruits.map(fruit => {
-            return API3.SquareVectorDistance(fruit.position(), house.position);
-        }));
-    });
-    houses.sort(by(x => x.fruitDist));
-    return findPlacement(houses, template, angle);
-}
-
 function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     const {cav, rangeds, melees, women, cc, minister, enemyCC} = entities;
     const {trees, fruits, meats, metals, stones} = entities;
 
     cacheStructureCorners(cc);
+    const cacheCCDist = x => x.ccDist = pointRectDistanceSquared(x.position(), cc.corners);
     [cav, ...rangeds, ...melees, ...women,
-     ...trees, ...fruits, ...meats, ...metals, ...stones].forEach(ent => {
-         ent.ccDist = pointRectDistanceSquared(ent.position(), cc.corners);
-    });
+     ...trees, ...fruits, ...meats, ...metals, ...stones].forEach(cacheCCDist);
     fruits.splice(fruits.filter(x => x.ccDist < 250*250).length);
     [fruits, meats, metals, stones].forEach(x => x.sort(by(x => x.ccDist)));
-    fruits.forEach(cacheStructureCorners);
-    cacheStructureCorners(metals[0]);
-    cacheStructureCorners(stones[0]);
+    [ ...fruits, metals[0], stones[0]].forEach(cacheStructureCorners);
 
     const teleportings = new Map();
     const constructings = new Map();
@@ -191,15 +175,16 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
 
     // 2. Cav hunt
 
-    meats.forEach(x => x.cavDist = API3.SquareVectorDistance(x.position(), cav.position()));
+    const cacheCavDist = x => x.cavDist = API3.SquareVectorDistance(x.position(), cav.position());
+    meats.forEach(cacheCavDist);
     const cavMeat = minArg(x => x.cavDist, meats);
     if (cavMeat.cavDist < cav.ccDist + meats[0].ccDist) {
-        // Walk to meat nearest to swordcav
+        // Walk to cavMeat - meat nearest to swordcav
         cav.gather(cavMeat);
     } else {
-        // Teleport to meat nearest to CC
+        // Teleport to meat[0] - meat nearest to CC
         cav.garrison(cc);
-        teleportings.set(cav.id(), [cav, meats[0], "gather"]);
+        teleportings.set(cav.id(), [meats[0], "gather"]);
     }
 
     // 3. Assume metal and stone are sole obstructions,
@@ -213,14 +198,14 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     const fieldTrees = [];
     const houseTrees = [];
     let ignoredTrees = 0;
-    const moreTrees = [];
+    const outerTrees = [];
     entities.trees.forEach(tree => {
         if (tree.ccDist > 250*250) {
             ignoredTrees++;
             return;
         }
         if (tree.ccDist > 7000) {
-            moreTrees.push(tree);
+            outerTrees.push(tree);
             return;
         }
         cacheStructureCorners(tree);
@@ -243,36 +228,46 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
 
     // 5. Assume field trees are cleared, reserve 3 barracks and houses
 
-    const {houses, barracks} = hanHousesBarracksAround(cc, cc.cosa, cc.sina, [...mineCorners, ...houseTrees.map(x => x.corners)]);
+    const houseObstructs = [...mineCorners, ...houseTrees.map(x => x.corners)];
+    const {houses, barracks} = hanHousesBarracksAround(cc, cc.cosa, cc.sina, houseObstructs);
     reserves.houses = houses;
     reserves.barracks = barracks;
-    [...reserves.fields, ...reserves.houses, ...reserves.barracks].forEach(x => {
-        x.enemyCCDist = API3.SquareVectorDistance(x.position, enemyCC.position());
-    });
+    const cacheEnemyCCDist = x => x.enemyCCDist = API3.SquareVectorDistance(x.position, enemyCC.position());
+    [...reserves.fields, ...reserves.houses, ...reserves.barracks].forEach(cacheEnemyCCDist);
     [reserves.fields, reserves.houses, reserves.barracks].forEach(x => x.sort(by(x => -x.enemyCCDist)));
 
-    // 6. Cut first tree is top priority.
+    // 6. Cut base trees is top priority.
     //    Three worst workers build farmstead, house, and forest storehouse.
 
-    const firstTree = entities.baseTrees[0];
     const workers = [...women, ...rangeds, ...melees].map(unit => {
-        unit.firstTreeTeleport = unit.ccDist + firstTree.ccDist;
-        unit.firstTreeWalk = API3.SquareVectorDistance(unit.position(), firstTree.position());
-        unit.firstTreeDist = Math.min(unit.firstTreeTeleport, unit.firstTreeWalk);
+        unit.baseTreeTeleport = unit.ccDist + entities.baseTrees[0].ccDist;
+        const unitDist = x => x.unitDist = API3.SquareVectorDistance(x.position(), unit.position());
+        unit.baseTree = minArg(x => x.unitDist, entities.baseTrees.map(unitDist));
+        unit.baseTreeWalk = unit.baseTree.unitDist;
+        unit.baseTreeDist = Math.min(unit.baseTreeTeleport, unit.baseTreeWalk);
         return unit;
-    }).sort(by(x => -x.firstTreeDist));
+    }).sort(by(x => -x.baseTreeDist));
+
+    // Change the house with best fruit rate to farmstead
+    const farmsteads = reserves.houses.map(house => {
+        const houseDist = fruit => API3.SquareVectorDistance(fruit.position(), house.position);
+        const rate = fruit => fruit.resourceSupplyAmount() / houseDist(fruit);
+        house.fruitRate = sum(fruits.map(rate));
+        return house;
+    }).sort(by(x => -x.fruitRate));
+    const farmstead = findPlacement(farmsteads, applyCiv("foundation|structures/{civ}/farmstead"), cc.angle());
+    arrayRemove(farmstead, reserves.houses);
 
     // Among 3 worst workers, find best one to build farmstead.
-    const farmstead = pickFarmstead(reserves.houses, fruits, applyCiv("foundation|structures/{civ}/farmstead"), cc.angle());
-    arrayRemove(farmstead, reserves.houses);
     const builders = workers.splice(0, 3).map(unit => {
-        unit.farmsteadTeleport = unit.ccDist + pointRectDistanceSquared(farmstead.position, cc.corners);
+    unit.farmsteadTeleport = unit.ccDist + pointRectDistanceSquared(farmstead.position, cc.corners);
         unit.farmsteadWalk = API3.SquareVectorDistance(unit.position(), farmstead.position);
         unit.farmsteadDist = Math.min(unit.farmsteadTeleport, unit.farmsteadWalk)
         return unit;
     });
     const farmsteadBuilder = minArg(x => x.farmsteadDist, builders);
     arrayRemove(farmsteadBuilder, builders);
+
     postCommand({
 	"type": "construct",
 	"entities": [farmsteadBuilder.id()],
@@ -287,29 +282,14 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     });
     if (farmsteadBuilder.farmsteadTeleport < farmsteadBuilder.farmsteadWalk) {
         farmsteadBuilder.garrison(cc);
-        teleportings.set(farmsteadBuilder.id(), [farmsteadBuilder, "Farmstead", "repair"]);
+        const teleport = foundation => teleportings.set(farmsteadBuilder.id(), [foundation, "repair"]);
+        constructings.set("Farmstead", teleport);
     }
-    constructings.set("Farmstead", [[farmsteadBuilder], () => {
-        // For completeness only.  Should not run.
-        const farmstead = pickFarmstead(reserves.houses, fruits, applyCiv("foundation|structures/{civ}/farmstead"), cc.angle());
-        arrayRemove(farmstead, reserves.houses);
-        postCommand({
-	    "type": "construct",
-	    "entities": [farmsteadBuilder.id()],
-	    "template": applyCiv("structures/{civ}/farmstead"),
-	    "x": farmstead.position[0],
-	    "z": farmstead.position[1],
-	    "angle": cc.angle(),
-	    "autorepair": true,
-	    "autocontinue": false,
-	    "queued": false,
-	    "pushFront": false
-        });
-    }]);
 
     // Among 2 remaining worst workers, find best one to build house.
     const house = findPlacement(reserves.houses, applyCiv("foundation|structures/{civ}/house"), cc.angle());
     arrayRemove(house, reserves.houses);
+
     builders.map(unit => {
         unit.houseTeleport = unit.ccDist + pointRectDistanceSquared(house.position, cc.corners);
         unit.houseWalk = API3.SquareVectorDistance(unit.position(), house.position);
@@ -318,6 +298,7 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     });
     const houseBuilder = minArg(x => x.houseDist, builders);
     arrayRemove(houseBuilder, builders);
+
     postCommand({
 	"type": "construct",
 	"entities": [houseBuilder.id()],
@@ -332,51 +313,39 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     });
     if (houseBuilder.houseTeleport < houseBuilder.houseWalk) {
         houseBuilder.garrison(cc);
-        teleportings.set(houseBuilder.id(), [houseBuilder, "House", "repair"]);
+        const teleport = foundation => teleportings.set(houseBuilder.id(), [foundation, "repair"]);
+        constructings.set("House", teleport);
     }
-    constructings.set("House", [[houseBuilder], () => {
-        // For completeness only.  Should not run.
-        const house = findPlacement(reserves.houses, applyCiv("foundation|structures/{civ}/house"), cc.angle());
-        arrayRemove(house, reserves.houses);
-        postCommand({
-	    "type": "construct",
-	    "entities": [houseBuilder.id()],
-	    "template": applyCiv("structures/{civ}/house"),
-	    "x": house.position[0],
-	    "z": house.position[1],
-	    "angle": cc.angle(),
-	    "autorepair": true,
-	    "autocontinue": false,
-	    "queued": false,
-	    "pushFront": false
-        });
-    }]);
 
-    // The other worker build forest storehouse.
-    const {bucket, forests} = clusterForests(moreTrees);
+    // The remaining worker build forest storehouse.
+    const {bucket, forests} = clusterForests(outerTrees);
     forests.forEach(x => x.ccDist = API3.SquareVectorDistance(x.position, cc.position()));
-    const forest = minArg(x => x.ccDist, forests);
-    reserves.storehouse = findStorehouse(bucket, forest, cc, applyCiv("foundation|structures/{civ}/storehouse"));
-    forest.trees.forEach(x => x.dropDist = API3.SquareVectorDistance(x.position(), reserves.storehouse.position));
-    const forestTree = minArg(x => x.dropDist, forest.trees);
+    const firstForest = minArg(x => x.ccDist, forests);
+
+    reserves.storehouses = veryFirstStorehouses(bucket, firstForest, cc);
+    reserves.storehouse = findPlacement(reserves.storehouses, applyCiv("foundation|structures/{civ}/storehouse"), 0);
+
+    firstForest.trees.forEach(x => x.dropDist = API3.SquareVectorDistance(x.position(), reserves.storehouse.position));
+    const forestTree = minArg(x => x.dropDist, firstForest.trees);
+
     const storehouseBuilder = builders[0];
     storehouseBuilder.teleportDist = storehouseBuilder.ccDist + pointRectDistanceSquared(forestTree.position(), cc.corners);
     storehouseBuilder.walkDist = API3.SquareVectorDistance(storehouseBuilder.position(), forestTree.position());
     if (storehouseBuilder.teleportDist < storehouseBuilder.walkDist) {
         storehouseBuilder.garrison(cc);
-        teleportings.set(storehouseBuilder.id(), [storehouseBuilder, forestTree, "gather"]);
+        teleportings.set(storehouseBuilder.id(), [forestTree, "gather"]);
     } else {
         storehouseBuilder.gather(forestTree);
     }
 
-    // 7. Remaining 3 women 2 soldiers cut 50 wood then help storehouse
+    // 7. Remaining 3 women 2 soldiers cut base tree
 
     workers.forEach(unit => {
-        if (unit.firstTreeWalk < unit.firstTreeTeleport) {
-            unit.gather(firstTree);
+        if (unit.baseTreeWalk < unit.baseTreeTeleport) {
+            unit.gather(unit.baseTree);
         } else {
             unit.garrison(cc);
-            teleportings.set(unit.id(), [unit, firstTree, "gather"]);
+            teleportings.set(unit.id(), [entities.baseTrees[0], "gather"]);
         }
     });
 
@@ -392,88 +361,12 @@ function veryFirstMoment(entities, chat, postCommand, applyCiv) {
     veryFirstScout(minister, entities.forestTree.position(), cc.position());
 
     chat([
-        `cc: ${positionToString(cc.position())} ${roundDD(cc.angle())}rad`,
+        `cc at ${positionToString(cc.position())} ${roundDD(cc.angle())}rad`,
         `${roundDD(API3.VectorDistance(cc.position(), enemyCC.position()))} from enemy`,
         `${fieldTrees.length} field trees`
-    ].join(", "));
+    ].join(" | "));
     return {teleportings, constructings, reserves};
 }
-
-STEVENLAU.StevenlauBot.prototype.veryFirstConstructing = function()
-{
-    this.chat(`constructings ${Array.from(this.constructings.keys())}`);
-    this.gameState.getOwnFoundations().forEach(foundation => {
-        this.chat(`foundation ${foundation.genericName()}`);
-        if (!this.constructings.has(foundation.genericName())) {
-            if (foundation.getBuildersNb() == 0) {
-                this.chat(`possibly unhandled foundation: ${foundation.genericName()}, ${Array.from(this.constructings.keys())}`);
-            }
-            return;
-        }
-        this.constructings.get(foundation.genericName())[0].forEach(unit => {
-            if (this.teleportings.has(unit.id())) {
-                this.teleportings.set(unit.id(), [unit, foundation, "repair"]);
-            } else {
-                this.chat(`${unit.genericName()} repair ${foundation.genericName()}`);
-                unit.repair(foundation, true);
-            }
-        });
-        this.constructings.delete(foundation.genericName());
-    });
-    this.constructings.forEach(([units, onError]) => onError());
-    return this.constructings.size == 0;
-};
-
-STEVENLAU.StevenlauBot.prototype.veryFirstTeleporting = function()
-{
-    for (const id of this.entities.cc.garrisoned()) {
-        if (!this.teleportings.has(id)) {
-            this.chat(`unknown garrison: ${id}`);
-            continue;
-        }
-        const [unit, target, command] = this.teleportings.get(id);
-        this.entities.cc.setRallyPoint(target, command);
-        this.entities.cc.unload(id);
-        this.teleportings.delete(id);
-    }
-    return this.teleportings.size == 0;
-};
-
-STEVENLAU.StevenlauBot.prototype.veryFirstStorehouse = function()
-{
-    this.entities.workers.filter(unit => {
-        if (unit.fulled) return false;
-        const wood = unit.resourceCarrying()?.find(x => x.type == "wood")?.amount || 0;
-        const full = wood == 10 || wood < unit.wood;
-        // The second case was when worker is super close to CC
-        // and he just dropped wood during turn gap.
-        unit.wood = wood;
-        unit.fulled = full;
-        return full;
-    }).forEach(worker => {
-        worker.garrison(this.entities.cc);
-        this.teleportings.set(worker.id(), [worker, this.entities.forestTree, "gather"]);
-    });
-    if (this.gameState.getResources().wood < 100) return 0;
-    this.entities.farmsteadBuilder.gather(this.entities.forestTree, true);
-    this.entities.houseBuilder.gather(this.entities.forestTree, true);
-    Engine.PostCommand(this.gameState.getPlayerID(), {
-	"type": "construct",
-	"entities": [this.entities.storehouseBuilder.id()],
-	"template": this.gameState.applyCiv("structures/{civ}/storehouse"),
-	"x": this.reserves.storehouse.position[0],
-	"z": this.reserves.storehouse.position[1],
-	"angle": 0,
-	"autorepair": true,
-	"autocontinue": true,
-	"queued": false,
-	"pushFront": false
-    });
-    this.constructings.set("Storehouse", [[this.entities.storehouseBuilder, ...this.entities.workers], () => {
-        this.chat("on error");
-    }]);
-    return 1.5;
-};
 
 STEVENLAU.StevenlauBot.prototype.veryFirstMoments = function()
 {
@@ -481,7 +374,6 @@ STEVENLAU.StevenlauBot.prototype.veryFirstMoments = function()
         this.veryFirstState = 0;
         this.veryFirstMomentsFSM = [
             () => {
-                this.chat("FSM very first");
                 this.entities = this.veryFirstEntities();
                 const {teleportings, constructings, reserves} = veryFirstMoment(
                     this.entities,
@@ -494,23 +386,49 @@ STEVENLAU.StevenlauBot.prototype.veryFirstMoments = function()
                 this.reserves = reserves;
                 return 1.5;
             },
-            () => this.veryFirstConstructing(),
-            () => this.veryFirstTeleporting(),
             () => {
-                this.chat("FSM very first forest tree");
+                this.gameState.getOwnFoundations().forEach(foundation => {
+                    const s = foundation.genericName();
+                    if (!this.constructings.has(s)) return;
+                    this.constructings.get(s)(foundation);
+                    this.constructings.delete(s);
+                });
+                this.constructings.forEach((handler, name) => this.chat(`foundation not found: ${name}`));
+                return this.constructings.size == 0;
+            },
+            () => {
+                for (const id of this.entities.cc.garrisoned()) {
+                    if (!this.teleportings.has(id)) {
+                        this.chat(`unknown garrison: ${id}`);
+                        continue;
+                    }
+                    const [target, command] = this.teleportings.get(id);
+                    this.entities.cc.setRallyPoint(target, command);
+                    this.entities.cc.unload(id);
+                    this.teleportings.delete(id);
+                }
+                return this.teleportings.size == 0;
+            },
+            () => {
                 this.entities.farmsteadBuilder.gather(this.entities.forestTree, true);
                 this.entities.houseBuilder.gather(this.entities.forestTree, true);
-                return 1.5;
-            },
-            () => {
-                this.veryFirstTeleporting();
-                return this.veryFirstStorehouse();
-            },
-            () => this.veryFirstTeleporting(),
-            () => this.veryFirstConstructing(),
-            () => {
-                this.chat(`FSM very first gather fruit ${this.entities.fruits.length}`);
                 this.entities.cc.setRallyPoint(this.entities.fruits[0], "gather");
+                return 1;
+            },
+            () => {
+                if (this.gameState.getResources().wood < 100) return 0;
+                Engine.PostCommand(this.gameState.getPlayerID(), {
+	            "type": "construct",
+	            "entities": [this.entities.storehouseBuilder.id()],
+	            "template": this.gameState.applyCiv("structures/{civ}/storehouse"),
+	            "x": this.reserves.storehouse.position[0],
+	            "z": this.reserves.storehouse.position[1],
+	            "angle": 0,
+	            "autorepair": true,
+	            "autocontinue": true,
+	            "queued": false,
+	            "pushFront": false
+                });
                 return null;
             }
         ];
