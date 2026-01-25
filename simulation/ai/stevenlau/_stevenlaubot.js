@@ -172,7 +172,6 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
     this.state = 0;
     this.FSMs = [
         () => {
-            const x = new Promise(res => 0);
             if (this.gameState.getPlayerCiv() != "han") {
                 throw "stevenlauBot only works for Han.";
             }
@@ -181,35 +180,14 @@ STEVENLAU.StevenlauBot.prototype.CustomInit = function(gameState)
             return 1;
         },
         () => this.veryFirstMoments(),
-        () => this.p1Upgrades(),
-        /* () => this.p1Barracks(), */
-        /* () => this.p1Rush(), */
-        () => {
-            // Idle cavs go hunt
-            const idleCavs = [];
-            this.gameState.getOwnUnits().forEach(unit => {
-                if (unit.isIdle() && unit.hasClass("Cavalry")) {
-                    idleCavs.push(unit);
-                }
-            });
-            if (idleCavs.length > 0) {
-                let meat = null;
-                this.gameState.getResourceSupplies("food").forEach(supply => {
-                    if (supply.resourceSupplyType().specific != "meat") return;
-                    // Far away, so rouch distance from CC center is enough
-                    supply.dist = API3.SquareVectorDistance(supply.position(), this.cc.position());
-                    if (!meat || supply.dist < meat.dist) meat = supply;
-                });
-                if (meat) idleCavs.forEach(cav => cav.gather(meat));
-            }
-            return 0;
-        }
+        () => this.p1Upgrades()
     ];
 };
 
 STEVENLAU.StevenlauBot.prototype.OnUpdate = function()
 {
     if (this.state == -1) return;
+    if (this.resigned) return;
     try {
         while (true) {
             const x = this.FSMs[this.state]();
@@ -222,4 +200,3 @@ STEVENLAU.StevenlauBot.prototype.OnUpdate = function()
         this.state = -1;
     }
 };
-

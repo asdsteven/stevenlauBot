@@ -1,3 +1,5 @@
+// This is the very first 20 seconds.  We can assume zero attacks.
+
 STEVENLAU.StevenlauBot.prototype.veryFirstEntities = function()
 {
     // Loop once to cache all entities for analysis
@@ -153,7 +155,7 @@ function veryFirstScout(minister, [x, z], [xx, zz]) {
     }
 }
 
-function veryFirstMoment(entities, chat, postCommand, applyCiv) {
+function veryFirstMoment(entities, applyCiv, postCommand, chat) {
     const {cav, rangeds, melees, women, cc, minister, enemyCC} = entities;
     const {trees, fruits, meats, metals, stones} = entities;
 
@@ -377,9 +379,9 @@ STEVENLAU.StevenlauBot.prototype.veryFirstMoments = function()
                 this.entities = this.veryFirstEntities();
                 const {teleportings, constructings, reserves} = veryFirstMoment(
                     this.entities,
-                    x => this.chat(x),
+                    x => this.gameState.applyCiv(x),
                     x => Engine.PostCommand(this.gameState.getPlayerID(), x),
-                    x => this.gameState.applyCiv(x)
+                    x => this.chat(x)
                 );
                 this.teleportings = teleportings;
                 this.constructings = constructings;
@@ -389,23 +391,22 @@ STEVENLAU.StevenlauBot.prototype.veryFirstMoments = function()
             () => {
                 this.gameState.getOwnFoundations().forEach(foundation => {
                     const s = foundation.genericName();
-                    if (!this.constructings.has(s)) return;
-                    this.constructings.get(s)(foundation);
-                    this.constructings.delete(s);
+                    if (this.constructings.has(s)) {
+                        this.constructings.get(s)(foundation);
+                        this.constructings.delete(s);
+                    }
                 });
                 this.constructings.forEach((handler, name) => this.chat(`foundation not found: ${name}`));
                 return this.constructings.size == 0;
             },
             () => {
                 for (const id of this.entities.cc.garrisoned()) {
-                    if (!this.teleportings.has(id)) {
-                        this.chat(`unknown garrison: ${id}`);
-                        continue;
+                    if (this.teleportings.has(id)) {
+                        const [target, command] = this.teleportings.get(id);
+                        this.teleportings.delete(id);
+                        this.entities.cc.setRallyPoint(target, command);
+                        this.entities.cc.unload(id);
                     }
-                    const [target, command] = this.teleportings.get(id);
-                    this.entities.cc.setRallyPoint(target, command);
-                    this.entities.cc.unload(id);
-                    this.teleportings.delete(id);
                 }
                 return this.teleportings.size == 0;
             },
