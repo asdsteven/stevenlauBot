@@ -1,7 +1,8 @@
 {
     "name": "stevenlau Bot",
-    "description": "stevenlau Bot is a bot.",
+    "description": "stevenlau Bot is an AI bot, just like Petra Bot, but plays like stevenlau, i.e. phase 1 infantry rush.",
     "moduleName": "STEVENLAU",
     "constructor": "StevenlauBot",
-    "useShared": true
+    "filename": "_stevenlaubot.js",
+    "useShared": false
 }
