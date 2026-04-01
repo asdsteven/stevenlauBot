@@ -1,18 +1,17 @@
-// nav cell = 1m
-// terrain tile = 4m
-// territory tile = 8m
+// Do all messy setups
 
-import { ResearchIronAxes } from "simulation/ai/stevenlau/researchIronAxes.js";
-import * as geom from "simulation/ai/stevenlau/geom.js";
+import { Eye } from "simulation/ai/stevenlau/eye.js";
+import { Hand } from "simulation/ai/stevenlau/hand.js";
+import { Brain } from "simulation/ai/stevenlau/brain.js";
 
 function updateEntities(m, entities) {
     const ids = [];
     for (const [id, entity] of Object.entries(entities)) {
-        if (m.has(id)) {
-            Object.assign(m.get(id), entity);
+        if (m.has(+id)) {
+            Object.assign(m.get(+id), entity);
         } else {
-            m.set(id, entity);
-            ids.push(id);
+            m.set(+id, entity);
+            ids.push(+id);
         }
     }
     return ids;
@@ -38,11 +37,11 @@ function updateChangedTemplateInfo(m, changedTemplateInfo) {
 function updateChangedEntityTemplateInfo(m, changedEntityTemplateInfo) {
     const s = [];
     for (const [id, variableValues] of Object.entries(changedEntityTemplateInfo)) {
-        if (!m.has(id)) m.set(id, new Map());
-        const mID = m.get(id);
+        if (!m.has(+id)) m.set(+id, new Map());
+        const mID = m.get(+id);
         for (const {variable, value} of variableValues) {
             mID.set(variable, value);
-            s.push([id, variable, value]);
+            s.push([+id, variable, value]);
         }
     }
     return s;
@@ -54,33 +53,29 @@ export class StevenlauBot {
         this.difficulty = difficulty;
         this.behavior = behavior;
         print(`player:${player} difficulty:${difficulty} behavior:${behavior}\n`);
+        this.externalChats = [`Hello, I am player ${this.playerID}!`];
+        this.hijackChat();
         const state = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_AIInterface).GetFullRepresentation();
-        this.player = state.players[this.playerID];
-        this.entities = new Map();
-        this.changedTemplateInfo = new Map();
-        this.changedEntityTemplateInfo = new Map();
-        updateEntities(this.entities, state.entities);
-        updateChangedTemplateInfo(this.changedTemplateInfo,
+        this.eye = new Eye(this.playerID, state.players[this.playerID].civ, state.timeElapsed);
+        updateEntities(this.eye.entities, state.entities);
+        updateChangedTemplateInfo(this.eye.changedTemplateInfo,
                                   state.changedTemplateInfo);
-        updateChangedEntityTemplateInfo(this.changedEntityTemplateInfo,
+        updateChangedEntityTemplateInfo(this.eye.changedEntityTemplateInfo,
                                         state.changedEntityTemplateInfo);
-        this.runner = {
-            Run: () => {
-                if (this.player.civ != "han") {
-                    throw "stevenlauBot only works for Han.";
-                }
-                this.chat(`Hello, I am player ${this.playerID}!`);
-                return true;
-            }
-        };
-        this.externalChats = [];
+        this.hand = new Hand(this.playerID);
+        this.brain = new Brain(this.eye, this.hand);
+    }
+
+    hijackChat() {
 	const cmpGuiInterface = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_GuiInterface);
         cmpGuiInterface.exposedFunctions["ChatToStevenlauBot"] = 1;
-        cmpGuiInterface.ChatToStevenlauBot = (player, text) => {
-            // PostCommand not available in GUI realm, cannot call this.chat directly.
-            this.externalChats.push(`${this.playerID} ${player} ${text}`);
-            warn(JSON.stringify(this.externalChats));
-            return true;
+        cmpGuiInterface.stevenlauBots = cmpGuiInterface.stevenlauBots || [];
+        cmpGuiInterface.stevenlauBots.push(this);
+        cmpGuiInterface.ChatToStevenlauBot = function(player, text) {
+            for (const bot of this.stevenlauBots) {
+                // PostCommand not available in GUI realm, cannot call bot.chat directly.
+                bot.externalChats.push(`${bot.playerID} ${player} ${text}`);
+            };
         };
     }
 
@@ -105,27 +100,25 @@ export class StevenlauBot {
         return true;
     }
 
-    think() {
-    }
-
     HandleMessage(state, playerID) {
         this.externalChats.forEach(s => this.chat(s));
         this.externalChats = [];
         if (this.stop) return;
         if (playerID != this.playerID) throw `player:${this.playerID} HandleMessage playerID:${playerID}`;
-        this.player = state.players[this.playerID];
-        updateEntities(this.entities, state.entities).forEach(id =>
+        /* const civ = state.players[this.playerID].civ; */
+        this.eye.timeElapsed = state.timeElapsed;
+        updateEntities(this.eye.entities, state.entities).forEach(id =>
             this.chat(`new entity: ${id}:${this.entities.get(id).template}`));
         updateChangedTemplateInfo(
-            this.changedTemplateInfo,
+            this.eye.changedTemplateInfo,
             state.changedTemplateInfo
         ).forEach(([template, variable, value]) =>
             this.chat(`template change: ${template}.${variable} = ${value}`));
         updateChangedEntityTemplateInfo(
-            this.changedEntityTemplateInfo,
+            this.eye.changedEntityTemplateInfo,
             state.changedEntityTemplateInfo
         ).forEach(([id, variable, value]) => {
-            const entity = this.entities.get(id);
+            const entity = this.eye.entities.get(id);
             if (entity.owner == this.playerID) {
                 this.chat(`template change: ${id}:${entity.template}.${variable} = ${value}`);
             }
@@ -133,7 +126,7 @@ export class StevenlauBot {
         Object.entries(state.events).forEach(([name, msgs]) =>
             msgs.forEach(msg => this.chat(`${name} ${JSON.stringify(msg)}`)));
         try {
-            this.think();
+            this.brain.think();
         } catch (e) {
             if (e == "resign") {
                 Engine.PostCommand(this.playerID, {"type": "resign"});
@@ -144,3 +137,4 @@ export class StevenlauBot {
         }
     }
 }
+
