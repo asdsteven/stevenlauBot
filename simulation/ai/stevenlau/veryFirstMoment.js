@@ -1,3 +1,7 @@
+import { SquareVectorDistance } from "simulation/ai/common-api/utils.js";
+import { VectorDistance } from "simulation/ai/common-api/utils.js";
+import * as filters from "simulation/ai/common-api/filters.js";
+
 // This is the very first 20 seconds.  We can assume zero attacks.
 
 STEVENLAU.StevenlauBot.prototype.veryFirstEntities = function()
@@ -103,8 +107,8 @@ function veryFirstStorehouses(bucket, forest, cc) {
     const [x, z] = [Math.round(forest.position[0] / 20), Math.round(forest.position[1] / 20)];
     const candidates = [];
     const weight = pos => {
-        const ccDist = API3.SquareVectorDistance(pos, cc.position());
-        const forestDist = API3.SquareVectorDistance(pos, forest.position);
+        const ccDist = SquareVectorDistance(pos, cc.position());
+        const forestDist = SquareVectorDistance(pos, forest.position);
         return ccDist + 50 * forestDist;
     };
     for (let i = Math.max(0, x - 10); i <= x + 10; i++) {
@@ -112,7 +116,7 @@ function veryFirstStorehouses(bucket, forest, cc) {
             const key = i * 1000 + j;
             if (bucket.has(key)) continue;
             const pos = [i * 20 + 10, j * 20 + 10];
-            if (API3.SquareVectorDistance(pos, cc.position()) > 130*130) continue;
+            if (SquareVectorDistance(pos, cc.position()) > 130*130) continue;
             candidates.push({
                 position: pos,
                 weight: weight(pos)
@@ -177,7 +181,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     // 2. Cav hunt
 
-    const cacheCavDist = x => x.cavDist = API3.SquareVectorDistance(x.position(), cav.position());
+    const cacheCavDist = x => x.cavDist = SquareVectorDistance(x.position(), cav.position());
     meats.forEach(cacheCavDist);
     const cavMeat = minArg(x => x.cavDist, meats);
     if (cavMeat.cavDist < cav.ccDist + meats[0].ccDist) {
@@ -234,7 +238,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
     const {houses, barracks} = hanHousesBarracksAround(cc, cc.cosa, cc.sina, houseObstructs);
     reserves.houses = houses;
     reserves.barracks = barracks;
-    const cacheEnemyCCDist = x => x.enemyCCDist = API3.SquareVectorDistance(x.position, enemyCC.position());
+    const cacheEnemyCCDist = x => x.enemyCCDist = SquareVectorDistance(x.position, enemyCC.position());
     [...reserves.fields, ...reserves.houses, ...reserves.barracks].forEach(cacheEnemyCCDist);
     [reserves.fields, reserves.houses, reserves.barracks].forEach(x => x.sort(by(x => -x.enemyCCDist)));
 
@@ -243,7 +247,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     const workers = [...women, ...rangeds, ...melees].map(unit => {
         unit.baseTreeTeleport = unit.ccDist + entities.baseTrees[0].ccDist;
-        const unitDist = x => x.unitDist = API3.SquareVectorDistance(x.position(), unit.position());
+        const unitDist = x => x.unitDist = SquareVectorDistance(x.position(), unit.position());
         unit.baseTree = minArg(x => x.unitDist, entities.baseTrees.map(unitDist));
         unit.baseTreeWalk = unit.baseTree.unitDist;
         unit.baseTreeDist = Math.min(unit.baseTreeTeleport, unit.baseTreeWalk);
@@ -252,7 +256,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     // Change the house with best fruit rate to farmstead
     const farmsteads = reserves.houses.map(house => {
-        const houseDist = fruit => API3.SquareVectorDistance(fruit.position(), house.position);
+        const houseDist = fruit => SquareVectorDistance(fruit.position(), house.position);
         const rate = fruit => fruit.resourceSupplyAmount() / houseDist(fruit);
         house.fruitRate = sum(fruits.map(rate));
         return house;
@@ -263,7 +267,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
     // Among 3 worst workers, find best one to build farmstead.
     const builders = workers.splice(0, 3).map(unit => {
     unit.farmsteadTeleport = unit.ccDist + pointRectDistanceSquared(farmstead.position, cc.corners);
-        unit.farmsteadWalk = API3.SquareVectorDistance(unit.position(), farmstead.position);
+        unit.farmsteadWalk = SquareVectorDistance(unit.position(), farmstead.position);
         unit.farmsteadDist = Math.min(unit.farmsteadTeleport, unit.farmsteadWalk)
         return unit;
     });
@@ -294,7 +298,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     builders.map(unit => {
         unit.houseTeleport = unit.ccDist + pointRectDistanceSquared(house.position, cc.corners);
-        unit.houseWalk = API3.SquareVectorDistance(unit.position(), house.position);
+        unit.houseWalk = SquareVectorDistance(unit.position(), house.position);
         unit.houseDist = Math.min(unit.houseTeleport, unit.houseWalk);
         return unit;
     });
@@ -321,18 +325,18 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     // The remaining worker build forest storehouse.
     const {bucket, forests} = clusterForests(outerTrees);
-    forests.forEach(x => x.ccDist = API3.SquareVectorDistance(x.position, cc.position()));
+    forests.forEach(x => x.ccDist = SquareVectorDistance(x.position, cc.position()));
     const firstForest = minArg(x => x.ccDist, forests);
 
     reserves.storehouses = veryFirstStorehouses(bucket, firstForest, cc);
     reserves.storehouse = findPlacement(reserves.storehouses, applyCiv("foundation|structures/{civ}/storehouse"), 0);
 
-    firstForest.trees.forEach(x => x.dropDist = API3.SquareVectorDistance(x.position(), reserves.storehouse.position));
+    firstForest.trees.forEach(x => x.dropDist = SquareVectorDistance(x.position(), reserves.storehouse.position));
     const forestTree = minArg(x => x.dropDist, firstForest.trees);
 
     const storehouseBuilder = builders[0];
     storehouseBuilder.teleportDist = storehouseBuilder.ccDist + pointRectDistanceSquared(forestTree.position(), cc.corners);
-    storehouseBuilder.walkDist = API3.SquareVectorDistance(storehouseBuilder.position(), forestTree.position());
+    storehouseBuilder.walkDist = SquareVectorDistance(storehouseBuilder.position(), forestTree.position());
     if (storehouseBuilder.teleportDist < storehouseBuilder.walkDist) {
         storehouseBuilder.garrison(cc);
         teleportings.set(storehouseBuilder.id(), [forestTree, "gather"]);
@@ -364,7 +368,7 @@ function veryFirstMoment(entities, applyCiv, postCommand, chat) {
 
     chat([
         `cc at ${positionToString(cc.position())} ${roundDD(cc.angle())}rad`,
-        `${roundDD(API3.VectorDistance(cc.position(), enemyCC.position()))} from enemy`,
+        `${roundDD(VectorDistance(cc.position(), enemyCC.position()))} from enemy`,
         `${fieldTrees.length} field trees`
     ].join(" | "));
     return {teleportings, constructings, reserves};

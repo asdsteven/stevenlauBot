@@ -75,7 +75,7 @@ export class StevenlauBot {
             for (const bot of this.stevenlauBots) {
                 // PostCommand not available in GUI realm, cannot call bot.chat directly.
                 bot.externalChats.push(`${bot.playerID} ${player} ${text}`);
-            };
+            }
         };
     }
 
