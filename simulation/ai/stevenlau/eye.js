@@ -39,9 +39,10 @@ export class Eye {
         this.civilians = []
         for (const [id, entity] of this.entities.entries()) {
             const template = entity.template
-            if (template.genericName == "Civic Center") {
+            if (template.classes.has("CivilCentre")) {
                 if (entity.owner == this.playerID) {
                     this.ccs.push(entity)
+                    warn(`CC: ${entitywhxya(entity)}`)
                 } else {
                     this.enemyCCs.push(entity)
                 }

@@ -10,6 +10,7 @@ export function distanceSquared(a, b) {
     return Math.euclidDistance2DSquared(a[0], a[1], b[0], b[1])
 }
 
+// 0AD angle is clockwise rotation, but is often documented as anti-clockwise.
 function obstructionCorners(ent) {
     const cosx = ent.template.size[0] * ent.cos / 2
     const sinx = ent.template.size[0] * ent.sin / 2
@@ -19,8 +20,8 @@ function obstructionCorners(ent) {
             [-cosx, -sinx, cosz, sinz],
             [-cosx, -sinx, -cosz, -sinz],
             [cosx, sinx, -cosz, -sinz]].map(([dcosx, dsinx, dcosz, dsinz]) =>
-                [ent.position[0] + dcosx - dsinz,
-                 ent.position[1] + dsinx + dcosz])
+                [ent.position[0] + dcosx + dsinz,
+                 ent.position[1] + dcosz - dsinx])
 }
 
 /* function pointInRect(point, segs) {
@@ -52,10 +53,8 @@ function vectorAlmostIntersection(u, p, w, id) {
     const b = (u.y * p.x - u.x * p.y) / r
     const au = Vector2D.mult(u, a)
     const bw = Vector2D.add(p, Vector2D.mult(w, b))
-    if (-eps < a && a < 1 + eps && -eps < b && b < 1 + eps) {
-        warn(`${id} au ${dd(au.x)},${dd(au.y)} | bw ${dd(bw.x)},${dd(bw.y)} | ${a} ${b}`)
+    if (-eps < a && a < 1 + eps && -eps < b && b < 1 + eps)
         return Math.max(0, Math.min(a, 1))
-    }
     return null
 }
 
@@ -89,8 +88,6 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
             if (vectorAlmostIntersection(v, Vector2D.sub(p, u), w, 2) != null) aus.push(1)
             aus.push(vectorAlmostIntersection(u, p, w, 3))
             aus.push(vectorAlmostIntersection(u, Vector2D.sub(p, v), w, 4))
-            /* const jj = Vector2D.add(o, Vector2D.add(Vector2D.mult(u, au), Vector2D.mult(v, bv))) */
-            /* warn(`${dd(c1[0])},${dd(c1[1])} => ${JSON.stringify(aus.filter(au => au != null).map(dd))}`) */
         }
         const aus_ = aus.filter(au => au != null).sort()
         if (aus_.length < 2) return null
@@ -101,9 +98,6 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
     // u includes extensions on both sides.
     function onSide(o, u, v) {
         const cleanSegments = [[0, 1]]
-        warn(`o: ${dd(o.x)} ${dd(o.y)}`)
-        warn(`u: ${dd(u.x)} ${dd(u.y)} ${u.length()}`)
-        warn(`v: ${dd(v.x)} ${dd(v.y)} ${v.length()}`)
         const bounds = obstacles.map(obs => innerObstacle(o, u, v, obs)).filter(bound => bound != null)
         for (const [a, b] of bounds) {
             for (let i = 0; i < cleanSegments.length; i++) {
@@ -118,12 +112,7 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
                 if (a <= c && d <= b) cleanSegments.splice(i, 1)
                 else i++
             }
-            /* warn(`${a}:${b} => ` + "cleanSegments: " + cleanSegments.map(([a, b]) => `${dd(a)}:${dd(b)}`).join(" ")) */
         }
-
-        // debug
-        warn("cleanSegments: " + cleanSegments.map(([a, b]) => `${dd(a)}:${dd(b)}`).join(" "))
-
         const fields = []
         const center = o.clone()
                         .add(Vector2D.div(v, 2))
@@ -140,10 +129,6 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
                 p.add(h)
             }
         }
-
-        // debug
-        warn("fields: " + fields.map(([a, b]) => `(${dd(a)},${dd(b)})`).join(" "))
-
         return fields
     }
 
@@ -153,19 +138,12 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
     segs[2].cachedLength = cc.template.size[0]
     segs[3].cachedLength = cc.template.size[1]
 
-    // debug
-    warn(`field size: ${size} max gatherers: ${maxGatherers}`)
-    warn(`CC: ${entitywhxya(cc)} ${dd(cc.cos)} ${dd(cc.sin)}`)
-
     const placements = []
     // For each corner, we try to let one of the side to extend.
     // There are 2**4 = 16 possibilities.
     for (let bits = 0; bits < 16; bits++) {
         const fields = []
         segs.forEach((seg, i) => {
-            // debug
-            /* if (i > 0) return */
-
             // 0 means let the side before corner to extend;
             // 1 means let the side after corner to extend.
             const begin = (bits & 1 << i) ? extension : gap
@@ -179,11 +157,7 @@ export function fieldPlacements(cc, obstacles, size, maxGatherers) {
             fields.push(...onSide(o, u, v))
         })
         placements.push(fields)
-
-        // debug
-        /* break */
     }
-    warn(JSON.stringify(placements.map(x => x.length)))
     return placements.sort((a, b) => b.length - a.length)[0]
 }
 
