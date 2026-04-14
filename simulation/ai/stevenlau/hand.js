@@ -13,7 +13,7 @@ export class Hand {
         Engine.PostCommand(this.playerID, { "type": "delete-entities", "entities": entities.map(e => e.id) })
     }
 
-    construct(entities, template, x, z, angle, queued = false) {
+    construct(entities, template, x, z, angle, queued = false, pushFront = false) {
 	Engine.PostCommand(this.playerID, {
 	    "type": "construct",
 	    "entities": entities.map(e => e.id),
@@ -26,6 +26,10 @@ export class Hand {
 	    "queued": queued,
 	    "pushFront": false
 	});
+    }
+
+    walk(entities, x, z, queued = false, pushFront = false) {
+	Engine.PostCommand(this.playerID, { "type": "walk", "entities": entities.map(e => e.id), "x": x, "z": z, "queued": queued, "pushFront": pushFront });
     }
 }
 

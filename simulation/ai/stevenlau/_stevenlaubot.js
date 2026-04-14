@@ -91,7 +91,7 @@ export class StevenlauBot {
         updateChangedTemplateInfo(this.eye, state.changedTemplateInfo)
         updateChangedEntityTemplateInfo(this.eye, state.changedEntityTemplateInfo)
         Object.entries(state.events).forEach(([name, msgs]) =>
-            msgs.forEach(msg => warn(`${name} ${JSON.stringify(msg)}`)))
+            msgs.forEach(msg => warn(`${this.eye.timeElapsed} ${name} ${JSON.stringify(msg)}`)))
         try {
             this.brain.think()
         } catch (e) {

@@ -1,5 +1,6 @@
 // Tells Brain what I see.
 
+import { dd } from "simulation/ai/stevenlau/util.js"
 import * as geom from "simulation/ai/stevenlau/geom.js"
 import { entitywhxya } from "simulation/ai/stevenlau/util.js"
 import { Entity } from "simulation/ai/stevenlau/entity.js"
@@ -18,7 +19,8 @@ export class Eye {
         if (this.entities.has(id)) {
             this.entities.get(id).update(entity)
         } else {
-            const newEntity = new Entity(id, entity, this.players[this.playerID].templatesCache)
+            const templateCache = this.players[this.playerID].templatesCache
+            const newEntity = new Entity(id, entity, templateCache)
             this.entities.set(id, newEntity)
             this.listener?.("new entity", newEntity)
         }
@@ -32,53 +34,72 @@ export class Eye {
 
     scanEntities() {
         this.ccs = []
+        this.civilians = []
+        this.melees = []
+        this.structures = []
         this.enemyCCs = []
         this.metals = []
         this.stones = []
+        this.trees = []
         this.fruits = []
-        this.civilians = []
+        this.allStructures = []
         for (const [id, entity] of this.entities.entries()) {
             const template = entity.template
-            if (template.classes.has("CivilCentre")) {
-                if (entity.owner == this.playerID) {
+            if (entity.owner == this.playerID) {
+                if (template.classes.has("CivilCentre")) {
                     this.ccs.push(entity)
+                    this.allStructures.push(entity)
                     warn(`CC: ${entitywhxya(entity)}`)
-                } else {
-                    this.enemyCCs.push(entity)
+                } else if (template.classes.has("Civilian")) {
+                    this.civilians.push(entity)
+                } else if (template.classes.has("Infantry") && template.classes.has("Melee")) {
+                    this.melees.push(entity)
+                } else if (template.classes.has("Structure")) {
+                    this.structures.push(entity)
+                    this.allStructures.push(entity)
                 }
+            } else if (template.classes.has("CivilCentre")) {
+                this.enemyCCs.push(entity)
+                this.allStructures.push(entity)
             } else if (template.resourceSupplyType?.startsWith("metal.")) {
-                entity.amount
                 this.metals.push(entity)
             } else if (template.resourceSupplyType?.startsWith("stone.")) {
-                entity.amount
                 this.stones.push(entity)
+            } else if (template.resourceSupplyType?.startsWith("wood.")) {
+                this.trees.push(entity)
             } else if (template.resourceSupplyType?.endsWith(".fruit")) {
-                entity.amount
                 this.fruits.push(entity)
-            } else if (template.classes.has("Civilian")) {
-                this.civilians.push(entity)
+            } else if (template.classes.has("Structure")) {
+                this.allStructures.push(entity)
             }
         }
         for (const cc of this.ccs) {
             // 140 * 1.25 * 1.25 = 218
-            const ccDist = `dist ${cc.id}`
-            this.metals.forEach(e => e[ccDist] = geom.distanceSquared(cc.position, e.position))
-            cc.metals = this.metals
-                            .filter(e => e[ccDist] < 250 * 250)
-                            .sort((a, b) => a[ccDist] - b[ccDist])
-            this.stones.forEach(e => e[ccDist] = geom.distanceSquared(cc.position, e.position))
-            cc.stones = this.stones
-                            .filter(e => e[ccDist] < 250 * 250)
-                            .sort((a, b) => a[ccDist] - b[ccDist])
-            this.fruits.forEach(e => e[ccDist] = geom.distanceSquared(cc.position, e.position))
-            cc.fruits = this.fruits
-                            .filter(e => e[ccDist] < 250 * 250)
-                            .sort((a, b) => a[ccDist] - b[ccDist])
+            const ccDist = `dist ${cc.id}`;
+            [this.metals, this.stones, this.trees, this.fruits, this.allStructures].forEach(es =>
+                es.forEach(e => e[ccDist] = cc.pos().distanceTo(e.pos())))
+            const nearCC = es => es.filter(e => e[ccDist] < 250 * 250)
+                                   .sort((a, b) => a[ccDist] - b[ccDist])
+            cc.metals = nearCC(this.metals)
+            cc.stones = nearCC(this.stones)
+            cc.trees = nearCC(this.trees)
+            cc.fruits = nearCC(this.fruits)
+            cc.structures = nearCC(this.allStructures)
             const field = Engine.GetTemplate(`structures/${this.civ}/field`)
+            const fieldWidth = +field.Obstruction.Static["@width"]
+            const fieldDepth = +field.Obstruction.Static["@depth"]
+            if (fieldWidth != fieldDepth) throw `field is not a square: ${fieldWidth}x${fieldDepth}`
             cc.fieldPlacements =
-                geom.fieldPlacements(cc, [...cc.metals, ...cc.stones],
-                                     +field.Obstruction.Static["@width"],
-                                     +field.ResourceSupply.MaxGatherers)
+                geom.fieldPlacements(cc, fieldWidth, +field.ResourceSupply.MaxGatherers,
+                                     [...cc.metals, ...cc.stones, ...cc.structures])
+            const farmstead = Engine.GetTemplate(`structures/${this.civ}/farmstead`)
+            const farmsteadWidth = +farmstead.Obstruction.Static["@width"]
+            const farmsteadDepth = +farmstead.Obstruction.Static["@depth"]
+            cc.firstFarmsteadPlacement =
+                geom.firstFarmsteadPlacement(cc, fieldWidth, Math.max(farmsteadWidth, farmsteadDepth),
+                                             cc.fruits, [...cc.metals, ...cc.stones,
+                                                         ...cc.trees, ...cc.fruits,
+                                                         ...cc.structures])
         }
     }
 }

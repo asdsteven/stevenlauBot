@@ -3,9 +3,17 @@ const templateKeys = new Set(["Identity/GenericName",
                               "Obstruction/Static/@width",
                               "Obstruction/Static/@depth"])
 
-function maybeNumber(x) {
-    if (x === undefined) return null
-    return +x
+function staticObstruction(obs) {
+    if (!obs) return null
+    return [+obs["@width"], +obs["@depth"]]
+}
+
+function clusterObstructions(obss) {
+    if (!obss) return null
+    return [obss.Right, obss.Left, obss.Door].map(obs => ({
+        position: [+obs["@x"], +obs["@z"]],
+        size: [+obs["@width"], +obs["@depth"]]
+    }))
 }
 
 export class Entity {
@@ -31,10 +39,11 @@ export class Entity {
         const fullTemplate = Engine.GetTemplate(this.templateName)
         const template = {
             genericName: fullTemplate.Identity.GenericName,
-            size: [maybeNumber(fullTemplate.Obstruction?.Static?.["@width"]),
-                   maybeNumber(fullTemplate.Obstruction?.Static?.["@depth"])],
+            size: staticObstruction(fullTemplate.Obstruction?.Static),
+            obstructions: clusterObstructions(fullTemplate.Obstruction?.Obstructions),
             resourceSupplyType: fullTemplate.ResourceSupply?.Type,
-            classes: new Set(fullTemplate.Identity?.VisibleClasses?._string?.split(" ") ?? [])
+            classes: new Set(fullTemplate.Identity?.VisibleClasses?._string?.split(" ") ?? []).union(
+                new Set(fullTemplate.Identity?.Classes?._string?.split(" ") ?? []))
         }
         this.templatesCache.set(this.templateName, template)
         return template
@@ -44,12 +53,12 @@ export class Entity {
         return this.amountCache ??= SimEngine.QueryInterface(this.id, Sim.IID_ResourceSupply).GetCurrentAmount()
     }
 
-    get sin() {
-        return this.sinCache ??= Math.sin(this.angle)
-    }
-
     get cos() {
         return this.cosCache ??= Math.cos(this.angle)
+    }
+
+    pos() {
+        return new Vector2D(...this.position)
     }
 }
 
