@@ -98,6 +98,8 @@ export class Eye {
             const farmstead = Engine.GetTemplate(`structures/${this.civ}/farmstead`)
             const farmsteadWidth = +farmstead.Obstruction.Static["@width"]
             const farmsteadDepth = +farmstead.Obstruction.Static["@depth"]
+            // Can't be too small because even game engine sincos approx is inaccurate.
+            // Theoretical error is around 1 / 2048.
             for (let eps = 1 / 1024; ; eps *= 2) {
                 const p = geom.firstFarmsteadPlacement(
                     cc, fieldWidth, Math.max(farmsteadWidth, farmsteadDepth), cc.fruits,

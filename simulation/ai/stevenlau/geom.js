@@ -92,10 +92,9 @@ function unobstructedStripes(stripes) {
 }
 
 export function fieldPlacements(cc, size, maxGatherers, obstacles) {
-    // Can't be too small because even game engine sincos approx is inaccurate.
-    // Theoretical error is around 1 / 2048.  But in practice, this is terrible.
-    // We evenly distribute fields, should be fine even with tighter eps.
-    const eps = 1 / 1024
+    // We can not yet do check placement due to trees / fruits.
+    // Better be cautious then.
+    const eps = 1 / 32
 
     /* const svg = new util.SVGPrinter(cc.position) */
 
@@ -183,7 +182,7 @@ export function fieldPlacements(cc, size, maxGatherers, obstacles) {
 export function firstFarmsteadPlacement(cc, size, farmsteadSize, fruits, obstacles, eps) {
     const svg = new util.SVGPrinter(cc.position)
 
-    const gap = 0.8 * 2 + 2 * 2 - eps
+    const gap = 0.8 * 2 + 2 * 2 - 1 / 32
     const obstacleClusters = obstacles.map(obs => obstructionCluster(obs, eps))
     function onSide(o, u) {
         const obstructed = obstacleClusters
