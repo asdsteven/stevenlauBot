@@ -11,7 +11,7 @@ export function sum(xs) {
     return xs.reduce((acc, x) => acc + x, 0)
 }
 
-export function checkPlacement(template, x, z, angle, playerID) {
+export function placementResult(template, x, z, angle, playerID) {
     const ent = SimEngine.AddLocalEntity(template)
     const pos = SimEngine.QueryInterface(ent, Sim.IID_Position)
     pos.JumpTo(x, z)
@@ -20,9 +20,10 @@ export function checkPlacement(template, x, z, angle, playerID) {
     cmpOwnership.SetOwner(playerID)
     const cmpBuildRestrictions = SimEngine.QueryInterface(ent, Sim.IID_BuildRestrictions)
     const result = cmpBuildRestrictions.CheckPlacement()
-    warn(`checkPlacement: ${JSON.stringify(result)}`)
     SimEngine.DestroyEntity(ent)
-    return result.success
+    if (result.success) return null
+    if (result.message == "%(name)s cannot be built on another building or resource") return "obstructed"
+    return result.message
 }
 
 export class SVGPrinter {
@@ -32,8 +33,13 @@ export class SVGPrinter {
         this.s = []
     }
 
-    push(corners, fill = "black", opacity = 1) {
-        const t = corners.map(([x, z]) => `${dd(500 + (x - this.x) * 3)} ${dd(500 - (z - this.z) * 3)}`)
+    rect(ous, fill = "black", opacity = 1) {
+        this.corners(ous.map(([o, u]) => o), fill, opacity)
+    }
+
+    corners(cs, fill = "black", opacity = 1) {
+        const t = cs.map(c => [c.x, c.y])
+                    .map(([x, z]) => `${dd(500 + (x - this.x) * 3)} ${dd(500 - (z - this.z) * 3)}`)
         this.s.push(`<polyline points="${t}" stroke="none" fill="${fill}" opacity="${dd(opacity)}" />`)
     }
 

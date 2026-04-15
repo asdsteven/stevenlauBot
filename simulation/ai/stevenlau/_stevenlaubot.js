@@ -39,12 +39,12 @@ export class StevenlauBot {
         const state = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_AIInterface).GetFullRepresentation()
         const players = state.players.map(player => ({team: player.team}))
         this.eye = new Eye(state.timeElapsed, players, this.playerID, state.players[this.playerID].civ)
+        this.hand = new Hand(this.playerID)
+        this.brain = new Brain(this.eye, this.hand)
         updateEntities(this.eye, state.entities)
         updateChangedTemplateInfo(this.eye, state.changedTemplateInfo)
         updateChangedEntityTemplateInfo(this.eye, state.changedEntityTemplateInfo)
         this.eye.scanEntities()
-        this.hand = new Hand(this.playerID)
-        this.brain = new Brain(this.eye, this.hand)
     }
 
     hijackChat() {

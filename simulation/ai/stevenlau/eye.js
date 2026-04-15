@@ -1,6 +1,6 @@
 // Tells Brain what I see.
 
-import { dd } from "simulation/ai/stevenlau/util.js"
+import * as util from "simulation/ai/stevenlau/util.js"
 import * as geom from "simulation/ai/stevenlau/geom.js"
 import { entitywhxya } from "simulation/ai/stevenlau/util.js"
 import { Entity } from "simulation/ai/stevenlau/entity.js"
@@ -22,7 +22,7 @@ export class Eye {
             const templateCache = this.players[this.playerID].templatesCache
             const newEntity = new Entity(id, entity, templateCache)
             this.entities.set(id, newEntity)
-            this.listener?.("new entity", newEntity)
+            if (this.timeElapsed > 0) this.listener("new entity", newEntity)
         }
     }
 
@@ -85,21 +85,35 @@ export class Eye {
             cc.trees = nearCC(this.trees)
             cc.fruits = nearCC(this.fruits)
             cc.structures = nearCC(this.allStructures)
+
+            const placements = {}
             const field = Engine.GetTemplate(`structures/${this.civ}/field`)
             const fieldWidth = +field.Obstruction.Static["@width"]
             const fieldDepth = +field.Obstruction.Static["@depth"]
             if (fieldWidth != fieldDepth) throw `field is not a square: ${fieldWidth}x${fieldDepth}`
-            cc.fieldPlacements =
+            placements.fields =
                 geom.fieldPlacements(cc, fieldWidth, +field.ResourceSupply.MaxGatherers,
                                      [...cc.metals, ...cc.stones, ...cc.structures])
+
             const farmstead = Engine.GetTemplate(`structures/${this.civ}/farmstead`)
             const farmsteadWidth = +farmstead.Obstruction.Static["@width"]
             const farmsteadDepth = +farmstead.Obstruction.Static["@depth"]
-            cc.firstFarmsteadPlacement =
-                geom.firstFarmsteadPlacement(cc, fieldWidth, Math.max(farmsteadWidth, farmsteadDepth),
-                                             cc.fruits, [...cc.metals, ...cc.stones,
-                                                         ...cc.trees, ...cc.fruits,
-                                                         ...cc.structures])
+            for (let eps = 1 / 1024; ; eps *= 2) {
+                const p = geom.firstFarmsteadPlacement(
+                    cc, fieldWidth, Math.max(farmsteadWidth, farmsteadDepth), cc.fruits,
+                    [...cc.metals, ...cc.stones, ...cc.trees, ...cc.fruits, ...cc.structures],
+                    eps)
+                const res = util.placementResult(`preview|structures/${this.civ}/farmstead`, p[0], p[1], cc.angle, this.playerID)
+                if (res == null) {
+                    placements.firstFarmstead = p
+                    break
+                }
+                if (res != "obstructed") `first farmstead placement: ${res}`
+                if (eps > 1) throw "first farmstead placement: failed too many times"
+                this.listener("chat", `first farmstead placement: failed with eps ${eps}`)
+            }
+
+            cc.placements = placements
         }
     }
 }
