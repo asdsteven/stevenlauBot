@@ -1,6 +1,6 @@
 import * as util from "simulation/ai/stevenlau/util.js"
 
-function cosUV(x, z, angle, cos) {
+export function cosUV(x, z, angle, cos) {
     const sinSign = angle => angle <= -Math.PI || 0 <= angle && angle <= Math.PI ? 1 : -1
     if (x) {
         const u = new Vector2D(cos, -sinSign(angle) * Math.sqrt(1 - Math.square(cos))).mult(x)
@@ -13,33 +13,35 @@ function cosUV(x, z, angle, cos) {
     }
 }
 
-// Four vectors in anti-clockwise.
-// Use only one cosine, fast and accurate.
-function cosRect(o, size, angle, cos, eps) {
-    const [u, v] = cosUV(size[0] / 2 + eps, size[1] / 2 + eps, angle, cos)
-    const os = [Vector2D.add(o, u).add(v),
-                Vector2D.sub(o, u).add(v),
-                Vector2D.sub(o, u).sub(v),
-                Vector2D.add(o, u).sub(v)]
-    return [[os[0], os[1], size[0] + eps * 2],
-            [os[1], os[2], size[1] + eps * 2],
-            [os[2], os[3], size[0] + eps * 2],
-            [os[3], os[0], size[1] + eps * 2]].map(([o, p, l]) => {
-                const u = Vector2D.sub(p, o)
-                u.cachedLength = l
-                return [o, u]
-            })
+// Rect is four sides as vectors in either all cw or all ccw
+export class Rect {
+    // Requires providing all four corners at high precision
+    constructor(os, [u, ul], [v, vl]) {
+        this.sides = [[os[0], u, ul],
+                      [os[1], v, vl],
+                      [os[2], Vector2D.mult(u, -1), ul],
+                      [os[3], Vector2D.mult(v, -1), vl]]
+    }
+
+    static fromOUV(o, [u, ul], [v, vl]) {
+        return new Rect([o, Vector2D.add(o, u), Vector2D.add(o, u).add(v), Vector2D.add(o, v)],
+                        [u, ul], [v, vl])
+    }
+
+    // Uses only one cosine, fast and accurate.  Vectors in
+    // anti-clockwise.
+    static fromCenter(center, size, angle, cos, eps) {
+        const [hu, hv] = cosUV(size[0] / 2 + eps, size[1] / 2 + eps, angle, cos)
+        return new Rect([Vector2D.sub(center, hu).sub(hv),
+                         Vector2D.add(center, hu).sub(hv),
+                         Vector2D.add(center, hu).add(hv),
+                         Vector2D.sub(center, hu).add(hv)],
+                        [Vector2D.mult(hu, 2), size[0] + eps * 2],
+                        [Vector2D.mult(hv, 2), size[1] + eps * 2])
+    }
 }
 
-function obstructionCluster(e, eps) {
-    if (e.template.size) return [cosRect(e.pos(), e.template.size, e.angle, e.cos, eps)]
-    return e.template.obstructions.map(({position, size}) => {
-        const [u, v] = cosUV(position[0], position[1], e.angle, e.cos)
-        return cosRect(e.pos().add(u).add(v), size, e.angle, e.cos, eps)
-    })
-}
-
-function vectorExplicitIntersection(u, p, w) {
+function vectorIntersection(u, p, w) {
     // au = p + bw, find a
     // aux = px + bwx | bwx = aux - px
     // auy = py + bwy | bwy = auy - py
@@ -50,204 +52,214 @@ function vectorExplicitIntersection(u, p, w) {
     const r = w.y * u.x - w.x * u.y
     const a = (w.y * p.x - w.x * p.y) / r
     const b = (u.y * p.x - u.x * p.y) / r
-    if (0 < a && a < 1 && 0 < b && b < 1) return a
-    return null
+    if (0 < a && a < 1 && 0 < b && b < 1) return Math.max(0, Math.min(a, 1))
+    return false
 }
 
-// obstructedStripe transforms obstacle to a non-zero stripe
-function obstructedStripe(o, u, obstacleRect) {
-    const ks = []
-    for (const [p, w] of obstacleRect) {
-        const op = Vector2D.sub(p, o)
-        const ku = Vector2D.dot(op, u) / u.cachedLength
-        const kv = Vector2D.dot(op, u.right) / u.right.cachedLength
-        if (0 < ku && ku < u.cachedLength && 0 < kv && kv < u.right.cachedLength) ks.push(ku / u.cachedLength)
-        if (vectorExplicitIntersection(u.right, op, w) != null) ks.push(0)
-        if (vectorExplicitIntersection(u.right, Vector2D.sub(op, u), w) != null) ks.push(1)
-        ks.push(vectorExplicitIntersection(u, op, w))
-        ks.push(vectorExplicitIntersection(u, Vector2D.sub(op, u.right), w))
-    }
-    const ks_ = ks.filter(k => k != null)
-    if (ks_.length < 2) return null
-    return [Math.min(...ks_), Math.max(...ks_)]
-}
-
-function unobstructedStripes(stripes) {
-    const unobstructed = [[0, 1]]
-    for (const [a, b] of stripes) {
-        for (let i = 0; i < unobstructed.length; i++) {
-            const [c, d] = unobstructed[i]
-            if (c < a && a < d) unobstructed.splice(i, 1, [c, a], [a, d])
-            else if (c < b && b < d) unobstructed.splice(i, 1, [c, b], [b, d])
-        }
-    }
-    for (const [a, b] of stripes) {
-        for (let i = 0; i < unobstructed.length; ) {
-            const [c, d] = unobstructed[i]
-            if (a <= c && d <= b) unobstructed.splice(i, 1)
-            else i++
-        }
-    }
-    return unobstructed
-}
-
-export function fieldPlacements(cc, size, maxGatherers, obstacles) {
-    // We can not yet do check placement due to trees / fruits.
-    // Better be cautious then.
-    const eps = 1 / 32
-
-    /* const svg = new util.SVGPrinter(cc.position) */
-
-    // We leave a small gap between field and cc.  This number comes from the
-    // fact that each farmer is a 0.8 x 0.8 square and they can farm or drop
-    // when they are within 2m from target.  Ideally we should let some fields
-    // to touch the cc, but computation becomes complicated.
-    const gap = 0.8 * 2 + 2 * 2 - eps
-
-    // We allow some part of a field to extend beyond the width of the cc.
-    // We still set a limit so that there is enough space for all farmers to
-    // farm within the width of cc so that they do not have to walk to drop
-    // resources.  No need epsilon because sqrt(2) is rounded up.
-    // 25.47 for most civ, 15.73 for Han.
-    const extension = size - 0.8 * 1.414214 * (maxGatherers - 1)
-
-    const obstacleClusters = obstacles.map(obs => obstructionCluster(obs, eps))
-
-    // o is a corner, u is the vector along CC side
-    // u includes extensions on both sides.
-    function onSide(o, u) {
-        const obstructed = obstacleClusters
-            .flatMap(rects => rects.map(rect => obstructedStripe(o, u, rect)))
-            .filter(stripe => stripe != null)
-
-        /* obstructed.forEach(([a, b]) =>
-         *     svg.corners([Vector2D.mult(u, a).add(o),
-         *                  Vector2D.mult(u, a).add(o).add(u.right),
-         *                  Vector2D.mult(u, b).add(o).add(u.right),
-         *                  Vector2D.mult(u, b).add(o)], "red", 0.1)) */
-
-        const center = Vector2D.div(u.right, 2).add(o)
-        const fields = []
-        for (const [a, b] of unobstructedStripes(obstructed)) {
-
-            /* svg.corners([Vector2D.mult(u, a).add(o),
-             *              Vector2D.mult(u, a).add(o).add(u.right),
-             *              Vector2D.mult(u, b).add(o).add(u.right),
-             *              Vector2D.mult(u, b).add(o)], "blue", 0.1) */
-
-            const n = Math.floor(((b - a) * u.cachedLength + size) / (size + eps)) - 1
-            if (n <= 0) continue
-            const sep = ((b - a) * u.cachedLength - n * size) / (n + 1)
-            for (let i = 0; i < n; i++)
-                fields.push(Vector2D.mult(u, (size / 2 + sep + (size + sep) * i) / u.cachedLength)
-                                    .add(center))
-        }
-        return fields
+// List of rects like [au, bu], [au, bu], ...
+export class Stripe {
+    constructor(o, [u, ul], [v, vl]) {
+        this.o = o
+        this.u = u
+        this.ul = ul
+        this.v = v
+        this.vl = vl
+        this.clips = [[0, 1]]
     }
 
-    const ccRect = cosRect(cc.pos(), cc.template.size, cc.angle, cc.cos, 0)
-
-    /* svg.rect(ccRect, "blue")
-     * obstacleClusters.forEach(rects => rects.map(rect => svg.rect(rect, "black"))) */
-
-    const fieldSets = []
-    // For each corner, we try to let one of the side to extend.
-    // There are 2**4 = 16 possibilities.
-    for (let bits = 0; bits < 16; bits++) {
-        const fields = []
-        ccRect.forEach(([o, u], i) => {
-            // 0 means let the side before corner to extend;
-            // 1 means let the side after corner to extend.
-            const begin = (bits & 1 << i) ? extension : gap
-            const end = (bits & 1 << (i + 1 & 3)) ? gap : extension
-            const p = u.perpendicular().mult(-gap / u.cachedLength)
-                       .add(o)
-                       .sub(Vector2D.mult(u, begin / u.cachedLength))
-            const w = Vector2D.mult(u, 1 + (begin + end) / u.cachedLength)
-            w.cachedLength = u.cachedLength + begin + end
-            w.right = u.perpendicular().mult(-size / u.cachedLength)
-            w.right.cachedLength = size
-            fields.push(...onSide(p, w))
+    obstructedClip(obstruction) {
+        const ks = obstruction.sides.flatMap(([p, w, wl]) => {
+            const op = Vector2D.sub(p, this.o)
+            const ku = Vector2D.dot(op, this.u) / this.ul
+            const kv = Vector2D.dot(op, this.v) / this.vl
+            return [0 < ku && ku < this.ul && 0 < kv && kv < this.vl && ku / this.ul,
+                    vectorIntersection(this.v, op, w) !== false && 0,
+                    vectorIntersection(this.v, Vector2D.sub(op, this.u), w) !== false && 1,
+                    vectorIntersection(this.u, op, w),
+                    vectorIntersection(this.u, Vector2D.sub(op, this.v), w)].filter(k => k !== false)
         })
-        fieldSets.push(fields)
+        return [Math.min(...ks), Math.max(...ks)]
     }
-    const fields = fieldSets.sort((a, b) => b.length - a.length)[0]
 
-    /* fields.forEach(o => svg.rect(cosRect(o, [size, size], cc.angle, cc.cos, 0)))
-     * svg.print() */
+    obstruct(obstructions) {
+        this.clips = []
+        let k = 0
+        obstructions.map(obs => this.obstructedClip(obs))
+                    .filter(([a, b]) => a < b)
+                    .sort(([a1,], [a2,]) => a1 - a2)
+                    .forEach(([a, b]) => {
+                        if (k < a) this.clips.push([k, a])
+                        if (k < b) k = b
+                    })
+        if (k < 1) this.clips.push([k, 1])
+        return this
+    }
 
-    return fields.map(v => [v.x, v.y])
+    rects() {
+        return this.clips.map(([a, b]) =>
+            Rect.fromOUV(Vector2D.mult(this.u, a).add(this.o),
+                         [Vector2D.mult(this.u, b - a), b - a], [this.v, this.vl]))
+    }
 }
 
-export function firstFarmsteadPlacement(cc, size, farmsteadSize, fruits, obstacles, eps) {
-    const svg = new util.SVGPrinter(cc.position)
+export class Placement {
+    constructor(template, position, angle, cos) {
+        this.template = template
+        this.position = position
+        this.angle = angle
 
-    const gap = 0.8 * 2 + 2 * 2 - 1 / 32
-    const obstacleClusters = obstacles.map(obs => obstructionCluster(obs, eps))
-    function onSide(o, u) {
-        const obstructed = obstacleClusters
-            .flatMap(rects => rects.map(rect => obstructedStripe(o, u, rect)))
-            .filter(stripe => stripe != null)
+        this.cos = cos
+        this.offset = new Vector2D(0, 0)
+        this.tries = 0
+    }
 
-        obstructed.forEach(([a, b]) =>
-            svg.corners([Vector2D.mult(u, a).add(o),
-                         Vector2D.mult(u, a).add(o).add(u.right),
-                         Vector2D.mult(u, b).add(o).add(u.right),
-                         Vector2D.mult(u, b).add(o)], "red", 0.1))
+    key() {
+        const p = Vector2D.add(this.position, this.offset).round()
+        return `foundation|${this.template.name} ${p.x} ${p.y}`
+    }
 
-        const center = Vector2D.div(u.right, 2).add(o)
-        const placements = []
-        for (const [a, b] of unobstructedStripes(obstructed)) {
+    square() {
+        const size = Math.max(...this.template.size)
+        return Rect.fromCenter(this.position, [size, size], this.angle, this.cos, 0)
+    }
 
-            svg.corners([Vector2D.mult(u, a).add(o),
-                         Vector2D.mult(u, a).add(o).add(u.right),
-                         Vector2D.mult(u, b).add(o).add(u.right),
-                         Vector2D.mult(u, b).add(o)], "blue", 0.1)
+    rect() {
+        return Rect.fromCenter(this.position, this.template.size, this.angle, this.cos, 0)
+    }
+}
 
-            if ((b - a) * u.cachedLength > farmsteadSize) {
-                placements.push(Vector2D.mult(u, (a * u.cachedLength + farmsteadSize / 2) / u.cachedLength)
-                                        .add(center))
-                placements.push(Vector2D.mult(u, (b * u.cachedLength - farmsteadSize / 2) / u.cachedLength)
-                                        .add(center))
+export function fieldStripes(template, extendEnds, dropsite, obstructions, eps) {
+    if (template.size[0] != template.size[1]) throw `field is not a square: ${field.size[0]}x${field.size[1]}`
+    const size = template.size[0]
+
+    // We first leave a small gap between field and dropsite to pack
+    // as many fields as possible.  This number comes from the fact
+    // that each farmer is a 0.8 x 0.8 square and they can farm or
+    // drop when they are within 2m from target.  After calculating
+    // the max number of fields, we would shrink the gap.
+    const gap = (0.8 + 2) * 2 - 2 * eps
+
+    // We allow some part of a field to extend beyond the width of the
+    // dropsite.  We still set a limit so that there is enough space
+    // for all farmers to farm within the width of dropsite so that
+    // they do not have to walk to drop resources.  17.47 for most
+    // civ, 15.73 for Han.
+    const extension = size - 0.8 * Math.sqrt(2) * (template.maxGatherers - 1) - eps
+
+    return dropsite.rect.sides.map(([o, u, ul], i) => {
+        const extendBegin = !extendEnds[i + 3 & 3]
+        const extendEnd = extendEnds[i]
+        const begin = extendBegin ? extension : gap
+        const end = extendEnd ? extension : gap
+        const p = Vector2D.sub(o, Vector2D.mult(u, begin / ul))
+                          .sub(u.perpendicular().mult(eps / ul))
+        const w = Vector2D.mult(u, 1 + (begin + end) / ul)
+        const wl = begin + ul + end
+        const v = u.perpendicular().mult(-(gap + size) / ul)
+        return [new Stripe(p, [w, wl], [v, gap + size]).obstruct(obstructions),
+                [begin, extendBegin], [begin + ul, extendEnd]]
+    })
+}
+
+export function fieldPlacements(template, stripes, eps) {
+    if (template.size[0] != template.size[1]) throw `field is not a square: ${field.size[0]}x${field.size[1]}`
+    const size = template.size[0]
+    const sides = stripes.map(([stripe, [begin, extendBegin], [end, extendEnd]]) =>
+        [stripe, [begin, extendBegin], [end, extendEnd],
+         stripe.clips.map(([a, b]) => {
+             a *= stripe.ul
+             b *= stripe.ul
+             const n = Math.floor((b - a + size) / (size + eps)) - 1
+             if (n <= 0) return [0, null, null, null]
+             const evenSep = (a, b) => [n, a, b, (b - a - n * size) / (n + 1)]
+             const tight = n * size + (n + 1) * eps
+             const tightFrom = a => [n, a, a + tight, eps]
+             if (begin < a && b < end) {
+                 // We are well inside.  Just distribute evenly.
+                 return evenSep(a, b)
+             } else if (b < end) {
+                 if (begin < b - tight) {
+                     // Can be well inside.  Distribute evenly.
+                     return evenSep(begin, b)
+                 } else {
+                     // Have to extend anyway.  Gravity to b.
+                     return tightFrom(b - tight)
+                 }
+             } else if (begin < a) {
+                 if (a + tight < end) {
+                     // Can be well inside.  Distribute evenly.
+                     return evenSep(a, end)
+                 } else {
+                     // Have to extend anyway.  Gravity to a.
+                     return tightFrom(a)
+                 }
+             } else if (tight < end - begin) {
+                 // Can be well inside.  Distribute evenly.
+                 return evenSep(begin, end)
+             } else if (extendBegin == extendEnd) {
+                 // Both sides are of same type, gravity center.
+                 const x = tight - (end - begin)
+                 return tightFrom(begin - x / 2)
+             } else if (extendBegin) {
+                 // Get rid of end gap.
+                 return tightFrom(Math.max(a, end - tight))
+             } else {
+                 // Get rid of begin gap.
+                 return tightFrom(Math.min(b - tight, begin))
+             }
+    })])
+    return sides.flatMap(([stripe, [begin, extendBegin], [end, extendEnd], clips], i) => clips.flatMap(([n, a, b, sep]) => {
+        if (n == 0) return []
+        const prevSide = sides[i + 3 & 3]
+        const [, , [prevEnd, prevExtend]] = prevSide
+        const nextSide = sides[i + 1 & 3]
+        const [, [nextBegin, nextExtend]] = nextSide
+        const ps = []
+        for (let j = 0; j < n; j++) {
+            const k = a + sep + size / 2 + j * (sep + size)
+            let gap = 0
+            if (k - size / 2 < begin && !prevExtend) {
+                const prevClips = prevSide.at(-1)
+                const [, , prevB] = prevClips.at(-1)
+                gap = Math.max(0, prevB - prevEnd)
+            } else if (k + size / 2 > end && !nextExtend && extendEnd) {
+                // if not extendEnd, the next side should escape for me.
+                const nextClips = nextSide.at(-1)
+                const [, nextA] = nextClips[0]
+                gap = Math.max(0, nextBegin - nextA)
             }
+            ps.push([Vector2D.add(Vector2D.mult(stripe.v, (gap + size / 2) / stripe.vl),
+                                  Vector2D.mult(stripe.u, k / stripe.ul)).add(stripe.o),
+                     gap])
         }
-        return placements
-    }
-    const ccRect= cosRect(cc.pos(), cc.template.size, cc.angle, cc.cos, 0)
-
-    svg.rect(ccRect, "blue")
-    obstacleClusters.forEach(rects => rects.map(rect => svg.rect(rect, "black")))
-    fruits.forEach(fruit => svg.rect(cosRect(fruit.pos(), fruit.template.size,
-                                             fruit.angle, fruit.cos, 0), "red"))
-
-    const placements = []
-    for (const [o, u] of ccRect) {
-        const p = u.perpendicular().mult(-(gap + size + eps) / u.cachedLength)
-                   .add(o)
-                   .sub(Vector2D.mult(u, (gap + size + eps + farmsteadSize) / u.cachedLength))
-        const w = Vector2D.mult(u, 1 + (gap + size + eps + farmsteadSize) * 2 / u.cachedLength)
-        w.cachedLength = u.cachedLength + (gap + size + eps + farmsteadSize) * 2
-        w.right = u.perpendicular().mult(-farmsteadSize / u.cachedLength)
-        w.right.cachedLength = farmsteadSize
-        placements.push(...onSide(p, w))
-    }
-    for (const p of placements) {
-        fruits.forEach(fruit => fruit.dist = p.distanceTo(fruit.pos()))
-        p.rate = util.sum(fruits.filter(fruit => fruit.dist < 50)
-                                .map(fruit => fruit.amount / fruit.dist))
-    }
-    placements.sort((a, b) => b.rate - a.rate)
-
-    placements.forEach((p, i) =>
-        svg.rect(cosRect(p, [farmsteadSize, farmsteadSize], cc.angle, cc.cos, 0),
-                 "green", 1 - (i + 1) / placements.length))
-    /* svg.print() */
-    if (placements.length == 0) throw `Cannot even place a farmstead`
-
-    return [placements[0].x, placements[0].y]
+        return ps
+    }))
 }
 
-export function houseBarrackPlacements() {
+export function firstFarmsteadPlacement(cc, fieldSize, size, fruits, obstructions, eps) {
+    const gapField = (0.8 + 2) * 2 - 1 / 32 + fieldSize + eps
+
+    const stripe = cc.rect.sides.flatMap(([o, u, ul]) => {
+        const p = u.perpendicular().mult(-gapField / ul)
+                   .add(o)
+                   .sub(Vector2D.mult(u, (gapField + size) / ul))
+        const w = Vector2D.mult(u, 1 + (gapField + size) * 2 / ul)
+        const v = u.perpendicular().mult(-size / ul)
+        return new Stripe().populate(p, [w, ul + (gapField + size) * 2], [v, size], obstructions, eps)
+    })
+    const possibilities = stripe.filter(([{ul}, a, b]) => (b - a) * ul > size + eps)
+                                .flatMap(([{u, ul, center}, a, b]) =>
+        [Vector2D.mult(u, a + size / 2 / ul).add(center),
+         Vector2D.mult(u, b - size / 2 / ul).add(center)])
+                                .map(p => [p, util.sum(fruits.map(e => [e.amount, p.distanceTo(e.pos())])
+                                                             .filter(([amount, dist]) => dist < 50)
+                                                             .map(([amount, dist]) => amount / dist))])
+    const position = possibilities.sort(([,a], [,b]) => b - a)[0][0]
+    position.stripe = stripe
+    return position
+}
+
+export function housesBarracksPlacements(cc, fieldSize, houseSize, barracksSize, obstructions, eps) {
     return {housePlacements: [], barrackPlacements: []}
 }
 

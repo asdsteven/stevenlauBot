@@ -29,22 +29,20 @@ function updateChangedEntityTemplateInfo(eye, changedEntityTemplateInfo) {
 }
 
 export class StevenlauBot {
-    constructor({player, difficulty, behavior}) {
-        this.playerID = player
-        this.difficulty = difficulty
-        this.behavior = behavior
-        print(`player:${player} difficulty:${difficulty} behavior:${behavior}\n`)
-        this.externalChats = [`Hello, I am player ${this.playerID}!`]
-        this.hijackChat()
+    constructor({player: playerID, difficulty, behavior}) {
         const state = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_AIInterface).GetFullRepresentation()
-        const players = state.players.map(player => ({team: player.team}))
-        this.eye = new Eye(state.timeElapsed, players, this.playerID, state.players[this.playerID].civ)
-        this.hand = new Hand(this.playerID)
+        const players = state.players.map(player => ({
+            team: player.team,
+            resources: player.resourceCounts
+        }))
+        this.eye = new Eye(state.timeElapsed, players, playerID, difficulty, behavior, state.players[playerID].civ)
+        this.hand = new Hand(playerID)
         this.brain = new Brain(this.eye, this.hand)
         updateEntities(this.eye, state.entities)
         updateChangedTemplateInfo(this.eye, state.changedTemplateInfo)
         updateChangedEntityTemplateInfo(this.eye, state.changedEntityTemplateInfo)
         this.eye.scanEntities()
+        this.hijackChat()
     }
 
     hijackChat() {
@@ -52,11 +50,9 @@ export class StevenlauBot {
         cmpGuiInterface.exposedFunctions["ChatToStevenlauBot"] = 1
         cmpGuiInterface.stevenlauBots = cmpGuiInterface.stevenlauBots || []
         cmpGuiInterface.stevenlauBots.push(this)
+        cmpGuiInterface.stevenlauBots.sort((a, b) => a.eye.playerID - b.eye.playerID)
         cmpGuiInterface.ChatToStevenlauBot = function(player, text) {
-            for (const bot of this.stevenlauBots) {
-                // PostCommand not available in GUI realm, cannot call bot.chat directly.
-                bot.externalChats.push(`${bot.playerID} ${player} ${text}`)
-            }
+            this.stevenlauBots[0].hand.write(`${player} ${text}`)
         }
     }
 
@@ -64,43 +60,34 @@ export class StevenlauBot {
     }
 
     Deserialize(data) {
-        this.chat("deserialize")
+        this.hand.write("deserialize")
     }
 
-    chat(s) {
-        Engine.PostCommand(this.playerID, { "type": "aichat", "message": s.replace(/[\[\]]/g, '\\$&') })
-    }
-
-    chatJSON(x) {
-        this.chat(JSON.stringify(x))
-    }
-
-    needResearch(template) {
-        if (this.player.researchQueued.has(template)) return false
-        if (this.player.researchedTechs.has(template)) return false
-        return true
-    }
+    /* needResearch(template) {
+     *     if (this.player.researchQueued.has(template)) return false
+     *     if (this.player.researchedTechs.has(template)) return false
+     *     return true
+     * } */
 
     HandleMessage(state, playerID) {
-        this.externalChats.forEach(s => this.chat(s))
-        this.externalChats = []
         if (this.stop) return
-        if (playerID != this.playerID) throw `player:${this.playerID} HandleMessage playerID:${playerID}`
+        if (playerID != this.eye.playerID) throw `player:${this.playerID} HandleMessage playerID:${playerID}`
         this.eye.timeElapsed = state.timeElapsed
         updateEntities(this.eye, state.entities)
         updateChangedTemplateInfo(this.eye, state.changedTemplateInfo)
         updateChangedEntityTemplateInfo(this.eye, state.changedEntityTemplateInfo)
         Object.entries(state.events).forEach(([name, msgs]) =>
-            msgs.forEach(msg => warn(`${this.eye.timeElapsed} ${name} ${JSON.stringify(msg)}`)))
+            msgs.forEach(msg => print(`${this.eye.timeElapsed} ${name} ${JSON.stringify(msg)}\n`)))
         try {
             this.brain.think()
+            this.hand.flush()
         } catch (e) {
             if (e == "resign") {
-                Engine.PostCommand(this.playerID, {"type": "resign"})
+                Engine.PostCommand(this.eye.playerID, {"type": "resign"})
+                this.stop = true
             } else {
-                warn(`exception: ${e}`)
+                throw e
             }
-            this.stop = true
         }
     }
 }

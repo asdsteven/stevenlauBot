@@ -11,7 +11,7 @@ export function sum(xs) {
     return xs.reduce((acc, x) => acc + x, 0)
 }
 
-export function placementResult(template, x, z, angle, playerID) {
+export function placementResult(template, {x, y: z}, angle, playerID) {
     const ent = SimEngine.AddLocalEntity(template)
     const pos = SimEngine.QueryInterface(ent, Sim.IID_Position)
     pos.JumpTo(x, z)
@@ -33,13 +33,12 @@ export class SVGPrinter {
         this.s = []
     }
 
-    rect(ous, fill = "black", opacity = 1) {
-        this.corners(ous.map(([o, u]) => o), fill, opacity)
+    rect(r, fill = "black", opacity = 1) {
+        this.corners(r.sides.map(([{x,y}]) => [x,y]), fill, opacity)
     }
 
     corners(cs, fill = "black", opacity = 1) {
-        const t = cs.map(c => [c.x, c.y])
-                    .map(([x, z]) => `${dd(500 + (x - this.x) * 3)} ${dd(500 - (z - this.z) * 3)}`)
+        const t = cs.map(([x, z]) => `${dd(500 + (x - this.x) * 3)} ${dd(500 - (z - this.z) * 3)}`)
         this.s.push(`<polyline points="${t}" stroke="none" fill="${fill}" opacity="${dd(opacity)}" />`)
     }
 
