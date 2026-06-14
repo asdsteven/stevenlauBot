@@ -33,13 +33,26 @@ export class SVGPrinter {
         this.s = []
     }
 
-    rect(r, fill = "black", opacity = 1) {
-        this.corners(r.sides.map(([{x,y}]) => [x,y]), fill, opacity)
+    dx(x) {
+        return dd(500 + (x - this.x) * 3)
     }
 
-    corners(cs, fill = "black", opacity = 1) {
-        const t = cs.map(([x, z]) => `${dd(500 + (x - this.x) * 3)} ${dd(500 - (z - this.z) * 3)}`)
+    dz(z) {
+        return dd(500 - (z - this.z) * 3)
+    }
+
+    rect(r, fill = "black", opacity = 1, s = null) {
+        this.corners(r.edges.map(([{x,y}]) => [x,y]), fill, opacity, s)
+    }
+
+    corners(cs, fill = "black", opacity = 1, s = null) {
+        const t = cs.map(([x, z]) => `${this.dx(x)} ${this.dz(z)}`)
         this.s.push(`<polyline points="${t}" stroke="none" fill="${fill}" opacity="${dd(opacity)}" />`)
+        if (s) this.text(cs[0], s)
+    }
+
+    text([x, z], s) {
+        this.s.push(`<text x="${this.dx(x)}" y="${this.dz(z)}" text-anchor="middle"  dominant-baseline="middle" font-size="5">${s}</text>`)
     }
 
     print() {
