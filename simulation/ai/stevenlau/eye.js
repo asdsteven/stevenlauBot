@@ -1,6 +1,7 @@
 // Tells Brain what I see.
 
 import * as util from "simulation/ai/stevenlau/util.js"
+import { dd } from "simulation/ai/stevenlau/util.js"
 import * as geom from "simulation/ai/stevenlau/geom.js"
 import { TemplateCache } from "simulation/ai/stevenlau/template.js"
 import { entitywhxya } from "simulation/ai/stevenlau/util.js"
@@ -105,30 +106,73 @@ export class Eye {
             const eps = 1 / 32
 
             const field = this.player.templateCache.getOrLoad(`structures/${this.civ}/field`)
+            // const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
+            //                                     cc.stones.map(e => e.obstruction(eps)),
+            //                                     cc.fruits.map(e => e.obstruction(eps)),
+            //                                     cc.trees.map(e => e.obstruction(eps)),
+            //                                     cc.structures.flatMap(e => e.obstructions(eps)))
             const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
                                                 cc.stones.map(e => e.obstruction(eps)),
-                                                cc.structures.flatMap(e => e.obstructions(eps)))
+                                                cc.structures.flatMap(e => e.obstructions(eps)),
+                                                cc.fruits.concat(cc.trees).map(e => geom.Rect.fromCenter(e.pos(), [10,10], e.angle, e.cos, eps)))
+
+            const svg = new util.SVGPrinter(cc.position)
+            const vl = field.size[0] + (0.8 + 2) * 2
+            const vv = vl * vl
+            const extension = field.size[0] - 0.8 * Math.sqrt(2) * (field.maxGatherers - 1)
+            const areas = []
+            for (const oul of cc.rect.edges) {
+                const v = oul[1].perpendicular().mult(-vl / oul[2])
+                const ul = oul[2] + 2 * extension
+                const uu = ul * ul
+                const u = Vector2D.mult(oul[1], ul / oul[2])
+                const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
+                areas.push(geom.Rect.fromOUV(o, [u, ul], [v, vl]))
+            }
+            for (const obs of fieldObstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))) {
+                svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "black", 1)
+            }
+            for (const obs of fieldObstructions.filter(obs => areas.some(area => !obs.disjoint(area)))) {
+                svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1)
+            }
+            // let jj = 0
+            for (const oul of cc.rect.edges) {
+                // jj += 1
+                // if (jj % 2 == 0) continue
+                const v = oul[1].perpendicular().mult(-vl / oul[2])
+                const ul = oul[2] + 2 * extension
+                const uu = ul * ul
+                const u = Vector2D.mult(oul[1], ul / oul[2])
+                const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
+                new geom.TrapezoidalStrip(o, [u, ul], [v, vl], fieldObstructions, field, svg)
+            }
+            svg.print()
+            placements.fields = []
+            continue
+
             placements.fields = null
-            for (let bits = 0; bits < 16; bits++) {
-                const extendEnds = [1, 2, 4, 8].map(b => !!(bits & b))
-                const stripes = geom.fieldStripes(field, extendEnds, cc, fieldObstructions, eps)
-                const ps = geom.fieldPlacements(field, stripes, eps)
-                const sumGap = util.sum(ps.map(([,gap]) => gap))
-                if (placements.fields == null || placements.fields.length < ps.length ||
-                    placements.fields.length == ps.length && placements.fields.sumGap > sumGap) {
-                    placements.fields = ps.map(([p]) => new geom.Placement(field, p, cc.angle, cc.cos))
-                    placements.fields.stripes = stripes
-                    placements.fields.sumGap = sumGap
+            for (const gap of [0, (0.8 + 2) * 2 - 2 * eps]) {
+                for (let bits = 0; bits < 16; bits++) {
+                    const extendEnds = [1, 2, 4, 8].map(b => !!(bits & b))
+                    const strips = geom.fieldStrips(field, extendEnds, cc, fieldObstructions, gap, eps)
+                    const ps = geom.fieldPlacements(field, strips, eps)
+                    const sumGap = util.sum(ps.map(([,gap]) => gap))
+                    if (placements.fields == null || ps.length > placements.fields.length ||
+                        ps.length == placements.fields.length && sumGap < placements.fields.sumGap) {
+                        placements.fields = ps.map(([p]) => new geom.Placement(field, p, cc.angle, cc.cos))
+                        placements.fields.strips = strips
+                        placements.fields.sumGap = sumGap
+                    }
                 }
             }
-            const svg = new util.SVGPrinter(cc.position)
+            // const svg = new util.SVGPrinter(cc.position)
             cc.metals.forEach(e => svg.rect(e.rect))
             cc.stones.forEach(e => svg.rect(e.rect))
             cc.structures.forEach(e => e.obstructions(0).forEach(rect => svg.rect(rect)))
             cc.trees.forEach(e => svg.rect(e.rect, "green"))
             cc.fruits.forEach(e => svg.rect(e.rect, "red"))
             svg.rect(cc.rect)
-            placements.fields.stripes.forEach(([stripe]) => stripe.rects().map(rect => svg.rect(rect, "blue", 0.5)))
+            placements.fields.strips.forEach(([strip]) => strip.rects().map(rect => svg.rect(rect, "blue", 0.5)))
             placements.fields.forEach(p => svg.rect(geom.Rect.fromCenter(p.position, field.size, cc.angle, cc.cos, 0), "yellow", 0.5))
             svg.print()
             continue
@@ -138,7 +182,7 @@ export class Eye {
             // Can't be too small because even game engine sincos approx is inaccurate.
             // Theoretical error is around 1 / 2048.
             for (let eps = 1 / 32; ; eps *= 2) {
-                const p = geom.firstFarmsteadPlacement(cc, field.size[0], Math.max(...farmstead.size), cc.fruits,
+                const p = geom.firstFarmsteadPlacement(farmstead, placements.fields, cc, cc.fruits,
                                                        [].concat(cc.metals.map(e => e.obstruction(eps)),
                                                                  cc.stones.map(e => e.obstruction(eps)),
                                                                  cc.structures.flatMap(e => e.obstructions(eps)),
@@ -164,19 +208,15 @@ export class Eye {
                                        .filter(obs => placements.fields.every(p =>
                                            obs.disjoint(geom.Rect.fromCenter(p, [fieldWidth, fieldWidth], cc.angle, cc.cos, eps))))
 
-            const house = Engine.GetTemplate(`structures/${this.civ}/house`)
-            const houseWidth = +house.Obstruction.Static["@width"]
-            const houseDepth = +house.Obstruction.Static["@depth"]
-            const barracks = Engine.GetTemplate(`structures/${this.civ}/barracks`)
-            const barracksWidth = +barracks.Obstruction.Static["@width"]
-            const barracksDepth = +barracks.Obstruction.Static["@depth"]
-            ({houses: placements.houses, barracks: placements.barracks} = geom.housesBarracksPlacement(
-                cc, fieldWidth, Math.max(houseWidth, houseDepth), Math.max(barracksWidth, barracksDepth),
-                rigidObstructions.concat(treeObstructions,
-                                         [geom.Rect.fromCenter(placements.firstFarmstead,
-                                                               [farmsteadWidth, farmsteadDepth],
-                                                               cc.angle, cc.cos)]),
-                eps))
+            const house = this.player.templateCache.getOrLoad(`structures/${this.civ}/house`)
+            const barracks = this.player.templateCache.getOrLoad(`structures/${this.civ}/barracks`)
+            // ({houses: placements.houses, barracks: placements.barracks} = geom.housesBarracksPlacement(
+            //     cc, fieldWidth, Math.max(houseWidth, houseDepth), Math.max(barracksWidth, barracksDepth),
+            //     rigidObstructions.concat(treeObstructions,
+            //                              [geom.Rect.fromCenter(placements.firstFarmstead,
+            //                                                    [farmsteadWidth, farmsteadDepth],
+            //                                                    cc.angle, cc.cos)]),
+            //     eps))
         }
         this.see("scanned entities")
     }
