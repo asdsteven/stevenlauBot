@@ -106,46 +106,18 @@ export class Eye {
             const eps = 1 / 32
 
             const field = this.player.templateCache.getOrLoad(`structures/${this.civ}/field`)
-            // const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
-            //                                     cc.stones.map(e => e.obstruction(eps)),
-            //                                     cc.fruits.map(e => e.obstruction(eps)),
-            //                                     cc.trees.map(e => e.obstruction(eps)),
-            //                                     cc.structures.flatMap(e => e.obstructions(eps)))
             const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
                                                 cc.stones.map(e => e.obstruction(eps)),
-                                                cc.structures.flatMap(e => e.obstructions(eps)),
-                                                cc.fruits.concat(cc.trees).map(e => geom.Rect.fromCenter(e.pos(), [10,10], e.angle, e.cos, eps)))
+                                                cc.fruits.map(e => e.obstruction(eps)),
+                                                cc.trees.map(e => e.obstruction(eps)),
+                                                cc.structures.flatMap(e => e.obstructions(eps)))
+            // const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
+            //                                     cc.stones.map(e => e.obstruction(eps)),
+            //                                     cc.structures.flatMap(e => e.obstructions(eps)),
+            //                                     cc.fruits.concat(cc.trees).map(e => geom.Rect.fromCenter(e.pos(), [10,10], e.angle, e.cos, eps)))
 
             const svg = new util.SVGPrinter(cc.position)
-            const vl = field.size[0] + (0.8 + 2) * 2
-            const vv = vl * vl
-            const extension = field.size[0] - 0.8 * Math.sqrt(2) * (field.maxGatherers - 1)
-            const areas = []
-            for (const oul of cc.rect.edges) {
-                const v = oul[1].perpendicular().mult(-vl / oul[2])
-                const ul = oul[2] + 2 * extension
-                const uu = ul * ul
-                const u = Vector2D.mult(oul[1], ul / oul[2])
-                const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
-                areas.push(geom.Rect.fromOUV(o, [u, ul], [v, vl]))
-            }
-            for (const obs of fieldObstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))) {
-                svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "black", 1)
-            }
-            for (const obs of fieldObstructions.filter(obs => areas.some(area => !obs.disjoint(area)))) {
-                svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1)
-            }
-            // let jj = 0
-            for (const oul of cc.rect.edges) {
-                // jj += 1
-                // if (jj % 2 == 0) continue
-                const v = oul[1].perpendicular().mult(-vl / oul[2])
-                const ul = oul[2] + 2 * extension
-                const uu = ul * ul
-                const u = Vector2D.mult(oul[1], ul / oul[2])
-                const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
-                new geom.TrapezoidalStrip(o, [u, ul], [v, vl], fieldObstructions, field, svg)
-            }
+            geom.fieldPlacements(cc, fieldObstructions, field, svg)
             svg.print()
             placements.fields = []
             continue
