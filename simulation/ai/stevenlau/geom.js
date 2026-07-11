@@ -284,10 +284,352 @@ function guarantees(cond, notes) {
     if (!cond) throw `Failed guarantee: ${notes}`
 }
 
-const STYLE = 0
+function lerp(a, b, p) {
+    const l = Math.min(a, b)
+    const h = Math.max(a, b)
+    return Math.min(Math.max(a * p + b * (1 - p), l), h)
+}
+
+class Slope {
+    constructor(t0, h0, t9, h9) {
+        guarantees(t0 < t9, `cannot handle vertical line, sorry: ${t0}, ${t9}`)
+        this.t0 = t0
+        this.h0 = h0
+        this.t9 = t9
+        this.h9 = h9
+    }
+
+    static fromH([t0, , h0, t1, , h1]) {
+        return new Slope(t0, h0, t1, h1)
+    }
+
+    static fromL([t0, l0, , t1, l1]) {
+        return new Slope(t0, l0, t1, l1)
+    }
+
+    contains(t) {
+        return this.t0 <= t && t <= this.t9
+    }
+
+    h(t) {
+        guarantees(this.contains(t), `people should guarantee this before calling me ${this.t0} ${t} ${this.t9}`)
+        const p = (this.t9 - t) / (this.t9 - this.t0)
+        return lerp(this.h0, this.h9, p)
+    }
+
+    max() {
+        if (this.h0 > this.h9) return [this.h0, this.t0]
+        return [this.h9, this.t9]
+    }
+}
+
+class Constraint {
+    constructor(n, corners) {
+        guarantees(corners.length <= 2, "contraint affects at most corners")
+        this.n = n
+        this.corners = corners
+    }
+
+    clone() {
+        return new Constraint(this.n, this.corners.map(c => {
+            if (c.ext) {
+                return {cornerId: c.cornerId, ext: c.ext.slice()}
+            } else {
+                return {cornerId: c.cornerId, rise: c.rise.slice()}
+            }
+        }))
+    }
+
+    at(cornerId) {
+        return this.corners.find(({cornerId: id}) => id == cornerId)
+    }
+
+    adjust(cornerId, value) {
+        const i = this.corners.findIndex(({cornerId: id}) => id == cornerId)
+        if (this.corners[i].ext) {
+            const ext = this.corners[i].ext
+            const [ext0, ext1] = ext[1] > ext[0] ? [0, 1] : [1, 0]
+            if (value >= ext[ext1]) return
+            guarantees(value >= ext[ext0], `corner ${cornerId} ext cannot adjust need ${value} >= ${ext[ext0]}`)
+            const pair = this.corners[1 - i]
+            if (pair) {
+                const p = (ext[ext1] - value) / (ext[ext1] - ext[ext0])
+                if (pair.ext) {
+                    pair.ext[ext1] = lerp(pair.ext[ext0], pair.ext[ext1], p)
+                } else {
+                    pair.rise[ext1] = lerp(pair.rise[ext0], pair.rise[ext1], p)
+                }
+            }
+            ext[ext1] = value
+        } else {
+            const rise = this.corners[i].rise
+            const [rise0, rise1] = rise[1] > rise[0] ? [0, 1] : [1, 0]
+            if (value <= rise[rise0]) return
+            guarantees(value <= rise[rise1], `corner ${cornerId} rise cannot adjust need ${value} <= ${rise[rise1]}`)
+            const pair = this.corners[1 - i]
+            if (pair) {
+                const p = (rise[rise1] - value) / (rise[rise1] - rise[rise0])
+                if (pair.ext) {
+                    pair.ext[rise0] = lerp(pair.ext[rise0], pair.ext[rise1], p)
+                } else {
+                    pair.rise[rise0] = lerp(pair.rise[rise0], pair.rise[rise1], p)
+                }
+            }
+            rise[rise0] = value
+        }
+    }
+
+    adjustRise1(cornerId, value) {
+        const i = this.corners.findIndex(({cornerId: id}) => id == cornerId)
+        const rise = this.corners[i].rise
+        const [rise0, rise1] = rise[1] > rise[0] ? [0, 1] : [1, 0]
+        if (value == rise[rise1]) return
+        guarantees(value >= rise[rise0] && value < rise[rise1], `corner ${cornerId} rise cannot adjust need ${value} >= ${rise[rise0]}`)
+        const pair = this.corners[1 - i]
+        if (pair) {
+            const p = (rise[rise1] - value) / (rise[rise1] - rise[rise0])
+            if (pair.ext) {
+                pair.ext[rise1] = lerp(pair.ext[rise0], pair.ext[rise1], p)
+            } else {
+                pair.rise[rise1] = lerp(pair.rise[rise0], pair.rise[rise1], p)
+            }
+        }
+        rise[rise1] = value
+    }
+
+    static consistent(constraints) {
+        // We will be modifying it, so make a clone
+        constraints = constraints.map(c => c.clone())
+
+        const corners = [[], [], [], []]
+        for (const constraint of constraints) {
+            for (const {cornerId} of constraint.corners) {
+                corners[cornerId].push(constraint)
+            }
+        }
+        let changed = true
+        while (changed) {
+            changed = false
+            for (const [cornerId, constraints] of corners.entries()) {
+                if (constraints.length != 2) continue
+                let [c, d] = constraints
+                if (c.at(cornerId).ext && d.at(cornerId).ext) return null
+                if (c.at(cornerId).rise && d.at(cornerId).rise) return null
+                if (!c.at(cornerId).ext) [c, d] = [d, c]
+                if (Math.min(...c.at(cornerId).ext) > Math.max(...d.at(cornerId).rise)) return null
+                const rise1 = Math.max(...d.at(cornerId).rise)
+                if (Math.max(...c.at(cornerId).ext) > rise1) {
+                    c.adjust(cornerId, rise1)
+                    changed = true
+                }
+                const ext0 = Math.min(...c.at(cornerId).ext)
+                if (ext0 > Math.min(...d.at(cornerId).rise)) {
+                    d.adjust(cornerId, ext0)
+                    changed = true
+                }
+            }
+        }
+        return [constraints, corners]
+    }
+
+    static consolidate(edges, field, [constraints, corners], allStrips) {
+        const gap = (0.8 + 2) * 2
+        const extension = field.size[0] - 0.8 * Math.sqrt(2) * (field.maxGatherers - 1)
+        const vl = field.size[0] + gap
+        const vv = vl * vl
+        const svv = field.size[0] * vl
+        // constraints should be cloned in consistent already, no clone again
+
+        // All rises take minimum
+        let changed = true
+        while (changed) {
+            changed = false
+            for (const [cornerId, constraints] of corners.entries()) {
+                if (constraints.length != 2) continue
+                let [c, d] = constraints
+                if (!c.at(cornerId).ext) [c, d] = [d, c]
+                const rise1 = Math.max(...d.at(cornerId).rise)
+                if (Math.max(...c.at(cornerId).ext) > rise1) {
+                    print(`debug adjust ext1 from ${Math.max(...c.at(cornerId).ext)} to ${rise1}\n`)
+                    c.adjust(cornerId, rise1)
+                    changed = true
+                    break
+                }
+                const ext0 = Math.min(...c.at(cornerId).ext)
+                if (ext0 > Math.min(...d.at(cornerId).rise)) {
+                    print(`debug adjust rise0 from ${Math.min(...d.at(cornerId).rise)} to ${ext0}\n`)
+                    d.adjust(cornerId, ext0)
+                    changed = true
+                    break
+                }
+                if (Math.max(...d.at(cornerId).rise) != Math.min(...d.at(cornerId).rise)) {
+                    print(`debug adjust rise1 from ${Math.max(...d.at(cornerId).rise)} to ${Math.min(...d.at(cornerId).rise)}\n`)
+                    d.adjustRise1(cornerId, Math.min(...d.at(cornerId).rise))
+                    changed = true
+                    break
+                }
+            }
+        }
+
+        let penalty = 0
+        const centers = []
+        for (const [stripId, constraint] of constraints.entries()) {
+            // print(`debug consolidating strip ${stripId}\n`)
+            const [edgeId, strip, exhausts] = allStrips[stripId]
+            const t0 = strip[0][0]
+            const t9 = strip.at(-1)[3]
+            const oul = edges[edgeId]
+            const v = oul[1].perpendicular().mult(-vl / oul[2])
+            const ul = oul[2] + 2 * extension
+            const uu = ul * ul
+            const u = Vector2D.mult(oul[1], ul / oul[2])
+            const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
+            const suu = field.size[0] * ul
+            const euu = extension * ul
+            const ueu = (oul[2] + extension) * ul
+            const add = (t, rise) => {
+                const x = Vector2D.mult(u, (t + suu / 2) / uu)
+                const y = Vector2D.mult(v, (rise + field.size[1] / 2) / vl)
+                centers.push(x.add(y).add(o))
+                penalty += rise
+            }
+            const addLowest = t => {
+                for (const slope of strip.map(Slope.fromL)) {
+                    if (slope.contains(t)) {
+                        add(t, slope.h(t) / vl) // slope.h is l
+                        return
+                    }
+                }
+                guarantees(false, `strip ${stripId} t ${t} is not within t0 = ${t0}, t9 = ${t9}, ${JSON.stringify(strip)}`)
+            }
+            const addRise = (t, rise, bound) => {
+                let last = null
+                for (const [t0, l0, h0, t9, l9, h9] of strip) {
+                    let [t1, t8] = [Math.max(t0, t), t9]
+                    if (bound != null) t8 = Math.min(t8, bound)
+                    if (t8 < t1) continue
+                    if (h0 / vl < rise + field.size[1] && h9 / vl < rise + field.size[1]) continue
+                    if (h0 / vl < rise + field.size[1]) {
+                        const p = (h9 / vl - rise - field.size[1]) / (h9 / vl - h0 / vl)
+                        t1 = Math.max(t1, lerp(t0, t9, p))
+                    }
+                    if (h9 / vl < rise + field.size[1]) {
+                        const p = (h0 / vl - rise - field.size[1]) / (h0 / vl - h9 / vl)
+                        t8 = Math.min(t8, lerp(t9, t0, p))
+                    }
+                    if (t8 < t1) continue
+                    const p1 = (t9 - t1) / (t9 - t0)
+                    const rise1 = Math.max(rise, lerp(l0 / vl, l9 / vl, p1))
+                    if (bound == null) {
+                        add(t1, rise1)
+                        return [rise1, t1]
+                    }
+                    const p8 = (t9 - t8) / (t9 - t0)
+                    const rise8 = Math.max(rise, lerp(l0 / vl, l9 / vl, p8))
+                    last = [rise8, t8]
+                }
+                add(last[1], last[0])
+                return last
+            }
+            if (constraint.corners.length == 0) {
+                // print("debug case 1\n")
+                for (let i = 0; i < constraint.n; i++) {
+                    addLowest(Math.max(t0, euu) + i * suu)
+                }
+            } else if (constraint.corners.length == 1) {
+                const c = constraint.corners[0]
+                // print(`debug case 2 ${JSON.stringify(c)}\n`)
+                for (let i = 0; i < constraint.n; i++) {
+                    if (c.cornerId == edgeId) {
+                        const t = Math.min(t9, ueu - suu) - i * suu
+                        if (c.rise && i == constraint.n - 1 && corners[c.cornerId].length == 2) {
+                            guarantees(c.rise[0] == c.rise[1], "static constraint")
+                            const other = corners[c.cornerId][1 - corners[c.cornerId].indexOf(constraint)]
+                            const [l, lt] = addRise(t0, Math.min(...other.at(c.cornerId).ext), t)
+                            other.adjust(c.cornerId, l)
+                        } else {
+                            addLowest(t)
+                        }
+                    } else {
+                        const t = Math.max(t0, euu) + i * suu
+                        if (c.rise && i == constraint.n - 1 && corners[c.cornerId].length == 2) {
+                            guarantees(c.rise[0] == c.rise[1], "static constraint")
+                            const other = corners[c.cornerId][1 - corners[c.cornerId].indexOf(constraint)]
+                            const [l, lt] = addRise(t, Math.min(...other.at(c.cornerId).ext), null)
+                            other.adjust(c.cornerId, l)
+                        } else {
+                            addLowest(t)
+                        }
+                    }
+                }
+            } else {
+                // print("debug case 3\n")
+                guarantees(constraint.corners.length == 2, "constraint.corners <= 2")
+                const [c, d] = constraint.corners
+                let t = t0
+                if (c.ext && d.ext) {
+                    constraint.adjust(d.cornerId, Math.min(...d.ext))
+                }
+                if (c.ext) {
+                    t = Math.max(t, euu - Math.max(...c.ext) * ul)
+                }
+                for (let i = 0; i < constraint.n; i++) {
+                    if (c.rise && i == 0 && corners[c.cornerId].length == 2) {
+                        const other = corners[c.cornerId][1 - corners[c.cornerId].indexOf(constraint)]
+                        const [l, lt] = addRise(t, Math.min(...other.at(c.cornerId).ext), null)
+                        other.adjust(c.cornerId, l)
+                        t = lt + suu
+                    } else if (d.rise && i == constraint.n - 1 && corners[d.cornerId].length == 2) {
+                        const other = corners[d.cornerId][1 - corners[d.cornerId].indexOf(constraint)]
+                        const [l, lt] = addRise(t, Math.min(...other.at(d.cornerId).ext), null)
+                        other.adjust(d.cornerId, l)
+                    } else {
+                        addLowest(t)
+                        t += suu
+                    }
+                }
+                // print("debug case 3 end\n")
+            }
+        }
+        return [penalty, centers]
+    }
+
+    static none(n) {
+        return new Constraint(n, [])
+    }
+
+    static ext(n, cornerId, ext) {
+        return new Constraint(n, [{cornerId: cornerId, ext: [ext, ext]}])
+    }
+
+    static rise(n, cornerId, s, h) {
+        return new Constraint(n, [{cornerId: cornerId, rise: [h - s, h - s]}])
+    }
+
+    static extExt(n, edgeId, begin0, begin1, end0, end1) {
+        return new Constraint(n, [{cornerId: edgeId, ext: [begin0, begin1]},
+                                  {cornerId: edgeId + 1 & 3, ext: [end0, end1]}])
+    }
+
+    static extRise(n, edgeId, s, ext0, ext1, h0, h1) {
+        return new Constraint(n, [{cornerId: edgeId, ext: [ext0, ext1]},
+                                  {cornerId: edgeId + 1 & 3, rise: [h0 - s, h1 - s]}])
+    }
+
+    static riseExt(n, edgeId, s, h0, h1, ext0, ext1) {
+        return new Constraint(n, [{cornerId: edgeId, rise: [h0 - s, h1 - s]},
+                                  {cornerId: edgeId + 1 & 3, ext: [ext0, ext1]}])
+    }
+
+    static riseRise(n, edgeId, s, h0, h1, h2, h3) {
+        return new Constraint(n, [{cornerId: edgeId, rise: [h0 - s, h1 - s]},
+                                  {cornerId: edgeId + 1 & 3, rise: [h2 - s, h3 - s]}])
+    }
+}
 
 class TrapezoidalStrip {
     static forFields(o, [u, ul], [v, vl], obstructions, field, svg) {
+        print("geom trapezoidal decomposition start\n")
         const trapeziums = TrapezoidalStrip.forFields1D(o, [u, ul], [v, vl], obstructions, field, svg)
         print("geom trapezoidal decomposition 1D finished\n")
         const strips = TrapezoidalStrip.forFields2D(trapeziums, field.size[0] * ul, field.size[0] * vl, svg)
@@ -296,25 +638,60 @@ class TrapezoidalStrip {
             const uu = ul * ul
             const vv = vl * vl
             let i = 0
-            for (const [t0, l0, h0, t1, l1, h1] of trapeziums) {
-                svg.corners([
-                    Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
-                    Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
-                    Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
-                    Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
-                ].map(({x,y}) => [x,y]), "green", i % 2 == 0 ? 0.5 : 0.4)
-                i += 1
-            }
+            // for (const [t0, l0, h0, t1, l1, h1] of trapeziums) {
+            //     svg.corners([
+            //         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
+            //         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
+            //         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
+            //         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
+            //     ].map(({x,y}) => [x,y]), "green", i % 2 == 0 ? 0.8 : 0.7)
+            //     i += 1
+            // }
             i = 0
             for (const strip of strips) {
                 for (const slit of strip) {
                     const [t1, l17, h17, t2, l28, h28] = slit
-                    svg.corners([
-                        Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l17 / vv)),
-                        Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, l28 / vv)),
-                        Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, h28 / vv)),
-                        Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h17 / vv))
-                    ].map(({x,y}) => [x,y]), "pink", i % 2 == 0 ? 0.8 : 0.6)
+                    if (t2 / uu <= t1 / uu + field.size[0] / ul) {
+                        svg.corners([
+                            Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l17 / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.min(l17, l28) / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.max(h17, h28) / vv)),
+                            Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h17 / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                        svg.corners([
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.min(l17, l28) / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.min(l17, l28) / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.max(h17, h28) / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.max(h17, h28) / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                        svg.corners([
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.min(l17, l28) / vv)),
+                            Vector2D.mult(u, t2 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, l28 / vv)),
+                            Vector2D.mult(u, t2 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, h28 / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.max(h17, h28) / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                    } else {
+                        const p = (t2 / uu - (t1 / uu + field.size[0] / ul)) / (t2 / uu - t1 / uu)
+                        const q = (t2 / uu - (t2 / uu - field.size[0] / ul)) / (t2 / uu - t1 / uu)
+                        svg.corners([
+                            Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l17 / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.min(l17, lerp(l17, l28, p)) / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.max(h17, lerp(h17, h28, p)) / vv)),
+                            Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h17 / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                        svg.corners([
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.min(l17, lerp(l17, l28, p)) / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.min(l28, lerp(l17, l28, q)) / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.max(h28, lerp(h17, h28, q)) / vv)),
+                            Vector2D.mult(u, t1 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, Math.max(h17, lerp(h17, h28, p)) / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                        svg.corners([
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.min(l28, lerp(l17, l28, q)) / vv)),
+                            Vector2D.mult(u, t2 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, l28 / vv)),
+                            Vector2D.mult(u, t2 / uu + field.size[0] / ul).add(o).add(Vector2D.mult(v, h28 / vv)),
+                            Vector2D.mult(u, t2 / uu).add(o).add(Vector2D.mult(v, Math.max(h28, lerp(h17, h28, q)) / vv))
+                        ].map(({x,y}) => [x,y]), "pink")
+                    }
                 }
                 i += 1
             }
@@ -425,14 +802,14 @@ class TrapezoidalStrip {
                 } else if (h0 - l0 > svv) {
                     const t = t1 - (t1 - t0) * (svv - (h1 - l1)) / (h0 - l0 - (h1 - l1))
                     const p = (t1 - t) / (t1 - t0)
-                    const l = l0 * p + l1 * (1 - p)
-                    const h = h0 * p + h1 * (1 - p)
+                    const l = lerp(l0, l1, p)
+                    const h = lerp(h0, h1, p)
                     trapeziums.push([t0, l0, h0, t, l, h])
                 } else if (h1 - l1 > svv) {
                     const t = t0 + (t1 - t0) * (svv - (h0 - l0)) / (h1 - l1 - (h0 - l0))
                     const p = (t1 - t) / (t1 - t0)
-                    const l = l0 * p + l1 * (1 - p)
-                    const h = h0 * p + h1 * (1 - p)
+                    const l = lerp(l0, l1, p)
+                    const h = lerp(h0, h1, p)
                     trapeziums.push([t, l, h, t1, l1, h1])
                 }
             }
@@ -484,8 +861,8 @@ class TrapezoidalStrip {
 
             const t7 = t1 + suu
             const p7 = (t9 - t7) / (t9 - t6)
-            const l7 = l6 * p7 + l9 * (1 - p7)
-            const h7 = h6 * p7 + h9 * (1 - p7)
+            const l7 = lerp(l6, l9, p7)
+            const h7 = lerp(h6, h9, p7)
             const l17 = Math.max(l1, floor, l7)
             const h17 = Math.min(h1, ceiling, h7)
 
@@ -507,12 +884,12 @@ class TrapezoidalStrip {
 
             const t2 = Math.min(...ts.filter(t => t > t1))
             const p2 = (t3 - t2) / (t3 - t0)
-            const l2 = l0 * p2 + l3 * (1 - p2)
-            const h2 = h0 * p2 + h3 * (1 - p2)
+            const l2 = lerp(l0, l3, p2)
+            const h2 = lerp(h0, h3, p2)
             const t8 = t2 + suu
             const p8 = (t9 - t8) / (t9 - t6)
-            const l8 = l6 * p8 + l9 * (1 - p8)
-            const h8 = h6 * p8 + h9 * (1 - p8)
+            const l8 = lerp(l6, l9, p8)
+            const h8 = lerp(h6, h9, p8)
             const l28 = Math.max(l2, floor, l8)
             const h28 = Math.min(h2, ceiling, h8)
             if (h17 - l17 > svv && h28 - l28 > svv) {
@@ -527,15 +904,15 @@ class TrapezoidalStrip {
             } else if (h17 - l17 > svv) {
                 const t = t2 - (t2 - t1) * (svv - (h28 - l28)) / (h17 - l17 - (h28 - l28))
                 const p = (t2 - t) / (t2 - t1)
-                const l = l17 * p + l28 * (1 - p)
-                const h = h17 * p + h28 * (1 - p)
+                const l = lerp(l17, l28, p)
+                const h = lerp(h17, h28, p)
                 strips.push([t1, l17, h17, t, l, h])
                 sweepline = [t, l, h]
             } else if (h28 - l28 > svv) {
                 const t = t1 + (t2 - t1) * (svv - (h17 - l17)) / (h28 - l28 - (h17 - l17))
                 const p = (t2 - t) / (t2 - t1)
-                const l = l17 * p + l28 * (1 - p)
-                const h = h17 * p + h28 * (1 - p)
+                const l = lerp(l17, l28, p)
+                const h = lerp(h17, h28, p)
                 strips.push([t, l, h, t2, l28, h28])
                 if (t2 == t3) {
                     guarantees(left < right, `${left} ${right} ${t1} ${t2} ${t3} ${t9 - suu} ${t9 - t1 <= suu} ${t9 - suu <= t1}`)
@@ -565,144 +942,147 @@ class TrapezoidalStrip {
         return groups
     }
 
-    static exhaust(edgeId, strip, suu, euu, ueu, ul, vl) {
-        const [t0, l0, h0, , , ] = strip[0]
-        const [, , , t9, l9, h9] = strip.at(-1)
+    static exhaust(edgeId, strip, field, suu, euu, ueu, ul, vl) {
+        const [t0, , h0, , , ] = strip[0]
+        const [, , , t9, , h9] = strip.at(-1)
+        // print(`debug exhausting edge ${edgeId} ${JSON.stringify(strip)}\n`)
         if (t0 < euu && t9 <= ueu - suu) {
+            // print("debug case 1\n")
             const n = Math.max(0, Math.ceil((t9 - euu) / suu))
             const m = Math.ceil((t9 - t0) / suu)
-            const s = [[n, STYLE + 0]]
+            const s = [Constraint.none(n)]
             if (m == n) return s
             guarantees(m == n + 1, "at most one field extend")
             const t = t9 - n * suu
             guarantees(euu > t, "must extend something")
-            s.push([m, STYLE + 1, [edgeId, (euu - t) / ul]])
-            const [h, ht] = strip.map(([t0, l0, h0, t1, l1, h1]) => {
-                if (t0 >= t) return [-Infinity]
-                if (t1 <= t) return h0 > h1 ? [h0, t0] : [h1, t1]
-                const p = (t1 - t) / (t1 - t0)
-                const h = h0 * p + h1 * (1 - p)
-                return h0 > h ? [h0, t0] : [h, t]
+            s.push(Constraint.ext(m, edgeId, (euu - t) / ul))
+            const [h, ht] = strip.map(Slope.fromH).map(slope => {
+                if (slope.t0 >= t) return [-Infinity]
+                if (slope.t9 <= t) return slope.max()
+                return new Slope(slope.t0, slope.h0, t, slope.h(t)).max()
             }).sort(([h0], [h1]) => h1 - h0)[0]
-            s.push([m, STYLE + 2, [edgeId, h / vl, ht]])
+            s.push(Constraint.rise(m, edgeId, field.size[1], h / vl))
             return s
         } else if (euu <= t0 && ueu - suu < t9) {
-            const n = Math.max(0, Math.floor((ueu - t0) / suu)) // TODO: quite tight actually, eps might be needed
+            // print("debug case 2\n")
+            const n = Math.max(0, Math.floor((ueu - t0) / suu))
             const m = Math.ceil((t9 - t0) / suu)
-            const s = [[n, STYLE + 0]]
+            const s = [Constraint.none(n)]
             if (m == n) return s
             guarantees(m == n + 1, "at most one field extend")
             guarantees(t0 + m * suu > ueu, "must extend something")
-            s.push([m, STYLE + 1, [edgeId + 1 & 3, (t0 + m * suu - ueu) / ul]])
+            s.push(Constraint.ext(m, edgeId + 1 & 3, (t0 + m * suu - ueu) / ul))
             const t = t0 + n * suu
-            const [h, ht] = strip.map(([t0, l0, h0, t1, l1, h1]) => {
-                if (t1 <= t) return [-Infinity]
-                if (t0 >= t) return h0 > h1 ? [h0, t0] : [h1, t1]
-                const p = (t1 - t) / (t1 - t0)
-                const h = h0 * p + h1 * (1 - p)
-                return h1 > h ? [h1, t1] : [h, t]
+            const [h, ht] = strip.map(Slope.fromH).map(slope => {
+                if (slope.t9 <= t) return [-Infinity]
+                if (slope.t0 >= t) return slope.max()
+                return new Slope(t, slope.h(t), slope.t9, slope.h9).max()
             }).sort(([h0], [h1]) => h1 - h0)[0]
-            s.push([m, STYLE + 2, [edgeId + 1 & 3, h / vl, ht]])
+            s.push(Constraint.rise(m, edgeId + 1 & 3, field.size[1], h / vl))
             return s
         } else if (t0 < euu && ueu - suu < t9) {
+            // print("debug case 3\n")
             const n = Math.floor((ueu - euu) / suu) // TODO: quite tight actually, eps might be needed
             const m = Math.ceil((t9 - t0) / suu)
-            const s = [[n, STYLE + 0]]
+            const s = [Constraint.none(n)]
             if (m == n) return s
             guarantees(m == n + 1 || m == n + 2, "at most two fields extend")
 
-            // Only extend begin.
-            const beginT = ueu - (n + 1) * suu
-            if (beginT >= t0) {
-                s.push([n + 1, STYLE + 1, [edgeId, ((n + 1) * suu - (ueu - euu)) / ul]])
-                const [beginH, beginHT] = strip.map(([t0, l0, h0, t1, l1, h1]) => {
-                    if (t0 >= beginT) return [-Infinity]
-                    if (t1 <= beginT) return h0 > h1 ? [h0, t0] : [h1, t1]
-                    const p = (t1 - beginT) / (t1 - t0)
-                    const h = h0 * p + h1 * (1 - p)
-                    return h0 > h ? [h0, t0] : [h, beginT]
-                }).sort(([h0], [h1]) => h1 - h0)[0]
-                s.push([n + 1, STYLE + 2, [edgeId, beginH / vl, beginHT]])
+            // Only extend / rise begin.
+            // const beginT = ueu - (n + 1) * suu
+            // if (beginT >= t0) {
+            //     s.push(Constraint.ext(n + 1, edgeId, ((n + 1) * suu - (ueu - euu)) / ul))
+            //     const [h, ht] = strip.map(Slope.fromH).map(slope => {
+            //         if (slope.t0 >= beginT) return [-Infinity]
+            //         if (slope.t9 <= beginT) return slope.max()
+            //         return new Slope(slope.t0, slope.h0, beginT, slope.h(beginT)).max()
+            //     }).sort(([h0], [h1]) => h1 - h0)[0]
+            //     s.push(Constraint.rise(n + 1, edgeId, field.size[1], h / vl))
+            // }
+
+            // // Only extend / rise end.
+            // const endT = euu + n * suu
+            // if (endT <= t9) {
+            //     s.push(Constraint.ext(n + 1, edgeId + 1 & 3, ((n + 1) * suu - (ueu - euu)) / ul))
+            //     const [h, ht] = strip.map(Slope.fromH).map(slope => {
+            //         if (slope.t9 <= endT) return [-Infinity]
+            //         if (slope.t0 >= endT) return slope.max()
+            //         return new Slope(endT, slope.h(endT), slope.t9, slope.h9).max()
+            //     }).sort(([h0], [h1]) => h1 - h0)[0]
+            //     s.push(Constraint.rise(n + 1, edgeId + 1 & 3, field.size[1], h / vl, ht))
+            // }
+
+            // Extend both sides.
+            for (let i = n + 1; i <= m; i++) {
+                const t1 = Math.max(t0, ueu - i * suu)
+                const t2 = Math.min(t9 - (i - 1) * suu, euu)
+                s.push(Constraint.extExt(i, edgeId, (euu - t1) / ul, (euu - t2) / ul, (t1 + i * suu - ueu) / ul, (t2 + i * suu - ueu) / ul))
             }
 
-            // Only extend end.
-            const endT = euu + n * suu
-            if (endT <= t9) {
-                s.push([n + 1, STYLE + 1, [edgeId + 1 & 3, ((n + 1) * suu - (ueu - euu)) / ul]])
-                const [endH, endHT] = strip.map(([t0, l0, h0, t1, l1, h1]) => {
-                    if (t1 <= endT) return [-Infinity]
-                    if (t0 >= endT) return h0 > h1 ? [h0, t0] : [h1, t1]
-                    const p = (t1 - endT) / (t1 - t0)
-                    const h = h0 * p + h1 * (1 - p)
-                    return h1 > h ? [h1, t1] : [h, endT]
-                }).sort(([h0], [h1]) => h1 - h0)[0]
-                s.push([n + 1, STYLE + 2, [edgeId + 1 & 3, endH / vl, endHT]])
-            }
-
-            // Extend both sides is super complicated.
-            const findMonotone = otherEnd => {
-                let best = [-Infinity]
-                for (const [t0, l0, h0, t1, l1, h1] of strip.toReversed()) {
-                    if (h1 > best[0]) best = [h1, t1]
-                    if (t1 >= otherEnd && otherEnd >= t0) {
-                        const p = (t1 - otherEnd) / (t1 - t0)
-                        const h = h0 * p + h1 * (1 - p)
-                        if (h > best[0]) return [h, otherEnd]
-                        return best
+            const riseEnd = (n, t1Bound, t2Bound, f) => {
+                let ht = [-Infinity]
+                for (const slope of strip.toReversed().map(Slope.fromH)) {
+		    const t1 = Math.max(slope.t0, t1Bound + (n - 1) * suu, ueu - suu)
+		    const t2 = Math.min(slope.t9, t2Bound + (n - 1) * suu)
+                    if (t1 > t2) {
+                        ht = slope.max()
+                        continue
                     }
-                    if (h0 > best[0]) best = [h0, t0]
-                }
+                    const h1 = slope.h(t1)
+                    const h2 = slope.h(t2)
+                    if (h1 > ht[0] && h1 > h2) {
+                        const p = (h1 - Math.max(ht[0], h2)) / (h1 - h2)
+                        const t = lerp(t2, t1, p)
+                        const h = slope.h(t)
+                        const tBound = lerp(t2Bound, t1Bound, p)
+                        f(t1Bound, tBound, h1, t1, h, t)
+                        if (t < t2) f(tBound, t2Bound, ht[0], ht[1], ht[0], ht[1])
+                    } else if (h2 > ht[0]) {
+                        f(t1Bound, t2Bound, h2, t2, h2, t2)
+                    } else {
+                        f(t1Bound, t2Bound, ht[0], ht[1], ht[0], ht[1])
+                    }
+                    ht = slope.max()
+		}
             }
+
+            // print("rise end, extend begin\n")
+            for (let i = n + 1; i <= m; i++) {
+                riseEnd(i, t0 + (i - 1) * suu, euu + (i - 1) * suu, (t1, t2, h3, t3, h4, t4) => {
+                    if (t3 > t2) return
+                    s.push(Constraint.extRise(i, edgeId, field.size[1], (euu - Math.min(euu, (t3 - (i - 1) * suu))) / ul, (euu - Math.min(euu, (t4 - (i - 1) * suu))) / ul, h3 / vl, h4 / vl))
+                })
+            }
+
+            // print("rise begin, extend / rise end\n")
             let ht = [-Infinity]
-            const newRecord = (h, t) => {
-                ht = [h, t]
-                const otherEnd = t + n * suu
-                if (otherEnd + suu > ueu && otherEnd + suu <= t9) {
-                    s.push([n + 1, STYLE + 3, [h / vl, t, (otherEnd + suu - ueu) / ul]])
-                    const otherHT = findMonotone(otherEnd)
-                    s.push([n + 1, STYLE + 4, [h / vl, t, otherHT[0] / vl, otherHT[1]]])
-                } else if (otherEnd + 2 * suu > ueu && otherEnd + 2 * suu <= t9) {
-                    s.push([n + 2, STYLE + 3, [h / vl, t, (otherEnd + 2 * suu - ueu) / ul]])
-                    const otherHT = findMonotone(otherEnd + suu)
-                    s.push([n + 2, STYLE + 4, [h / vl, t, otherHT[0] / vl, otherHT[1]]])
+            for (const slope of strip.map(Slope.fromH)) {
+                for (let i = n + 1; i <= m; i++) {
+                    const t1 = Math.max(slope.t0, ueu - i * suu)
+                    const t2 = Math.min(slope.t9, t9 - (i - 1) * suu, euu)
+                    if (t1 > t2) continue
+                    const h1 = slope.h(t1)
+                    const h2 = slope.h(t2)
+                    if (h2 > ht[0] && h2 > h1) {
+                        const p = (h2 - Math.max(ht[0], h1)) / (h2 - h1)
+                        const t = lerp(t1, t2, p)
+                        const h = slope.h(t)
+                        s.push(Constraint.riseExt(i, edgeId, field.size[1], h / vl, h2 / vl, (t + i * suu - ueu) / ul, (t2 + i * suu - ueu) / ul))
+                        riseEnd(i, t, t2, (t1, t2, h3, t3, h4, t4) => {
+                            s.push(Constraint.riseRise(i, edgeId, field.size[1], slope.h(t1) / vl, slope.h(t2) / vl, h3 / vl, h4 / vl))
+                        })
+                    } else if (h1 > ht[0]) {
+                        s.push(Constraint.riseExt(i, edgeId, field.size[1], h1 / vl, h1 / vl, (t1 + i * suu - ueu) / ul, (t1 + i * suu - ueu) / ul))
+                        riseEnd(i, t1, t1, (t1, t2, h3, t3, h4, t4) => {
+                            s.push(Constraint.riseRise(i, edgeId, field.size[1], slope.h(t1) / vl, slope.h(t2) / vl, h3 / vl, h4 / vl))
+                        })
+                    }
                 }
+                ht = slope.max()
             }
-            for (const [t0, l0, h0, t1, l1, h1] of strip) {
-                if (t0 >= euu || t0 + (n + 1) * suu >= t9) break
-                if (h0 > ht[0]) newRecord(h0, t0)
-                if (t1 <= euu) {
-                    if (h1 > ht[0]) newRecord(h1, t1)
-                } else {
-                    const p = (t1 - euu) / (t1 - t0)
-                    const h = h0 * p + h1 * (1 - p)
-                    if (h > ht[0]) newRecord(h, euu)
-                }
-            }
-            ht = [-Infinity]
-            const otherRecord = (h, t) => {
-                ht = [h, t]
-                const otherEnd = t - n * suu
-                if (otherEnd < euu && otherEnd >= t0) {
-                    s.push([n + 1, STYLE + 5, [(euu - otherEnd) / ul, h / vl, t]])
-                } else if (otherEnd - suu < euu && otherEnd - suu >= t0) {
-                    s.push([n + 2, STYLE + 5, [(euu - (otherEnd - suu)) / ul, h / vl, t]])
-                }
-            }
-            for (const [t0, l0, h0, t1, l1, h1] of strip.toReversed()) {
-                if (t1 <= ueu || t1 - (n + 1) * suu <= strip[0][0]) break
-                if (h1 > ht[0]) otherRecord(h1, t1)
-                if (t0 >= ueu) {
-                    if (h0 > ht[0]) otherRecord(h0, t0)
-                } else {
-                    const p = (t1 - ueu) / (t1 - t0)
-                    const h = h0 * p + h1 * (1 - p)
-                    if (h > ht[0]) otherRecord(h, ueu)
-                }
-            }
-            s.push([n + 1, STYLE + 6, [(euu - Math.max(t0, ueu - (n + 1) * suu)) / ul, (Math.min(t9 + suu, euu + (n + 1) * suu) - ueu) / ul, ((n + 1) * suu - (ueu - euu)) / ul]])
-            if (m == n + 2) s.push([m, STYLE + 6, [(euu - t0) / ul, (t9 + suu - ueu) / ul, (m * suu - (ueu - euu)) / ul]])
             return s
         } else {
+            // print("debug case 4\n")
             guarantees(euu <= t0 && t9 <= ueu - suu, "not interfering any corners")
             const n = Math.ceil((t9 - t0) / suu)
             return [[n, 0]]
@@ -711,7 +1091,6 @@ class TrapezoidalStrip {
 }
 
 export function fieldPlacements(dropsite, obstructions, field, svg) {
-    print("geom field placements start\n")
     const gap = (0.8 + 2) * 2
     const extension = field.size[0] - 0.8 * Math.sqrt(2) * (field.maxGatherers - 1)
     const vl = field.size[0] + gap
@@ -719,6 +1098,44 @@ export function fieldPlacements(dropsite, obstructions, field, svg) {
     const svv = field.size[0] * vl
 
     const areas = []
+    for (const [edgeId, oul] of dropsite.rect.edges.entries()) {
+        const v = oul[1].perpendicular().mult(-vl / oul[2])
+        const ul = oul[2] + 2 * extension
+        const u = Vector2D.mult(oul[1], ul / oul[2])
+        const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
+        areas.push(Rect.fromOUV(o, [u, ul], [v, vl]))
+    }
+    if (svg) {
+        // svg.rect(Rect.fromCenter(new Vector2D(...dropsite.position), dropsite.rect.edges.slice(0, 2).map(([,,l]) => l + gap * 2), dropsite.angle, dropsite.cos, 0), "black")
+        svg.rect(dropsite.rect, "silver")
+        obstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))
+                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "silver", 1))
+        obstructions.filter(obs => areas.some(area => !obs.disjoint(area)))
+                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1))
+    }
+
+    const printVector = v => `new Vector2D(${v.x},${v.y})`
+    print("geom field placements start\n")
+    print(`const mockDropsite = {\n`)
+    print(`  position: ${JSON.stringify(dropsite.position)},\n`)
+    print(`  angle: ${dropsite.angle},\n`)
+    print(`  cos: ${dropsite.cos},\n`)
+    print(`  rect: new geom.Rect([${dropsite.rect.edges.map(ouv => printVector(ouv[0])).join(", ")}],\n`)
+    print(`                      [${printVector(dropsite.rect.edges[0][1])}, ${dropsite.rect.edges[0][2]}],\n`)
+    print(`                      [${printVector(dropsite.rect.edges[1][1])}, ${dropsite.rect.edges[1][2]}])\n`)
+    print(`}\n`)
+    print(`const mockObstructions = [\n`)
+    for (const obs of obstructions.filter(obs => areas.some(area => !obs.disjoint(area)))) {
+        print(`  new geom.Rect([${obs.edges.map(ouv => printVector(ouv[0])).join(", ")}],\n`)
+        print(`                [${printVector(obs.edges[0][1])}, ${obs.edges[0][2]}],\n`)
+        print(`                [${printVector(obs.edges[1][1])}, ${obs.edges[1][2]}]),\n`)
+    }
+    print(`]\n`)
+    print(`const mockField = {\n`)
+    print(`  maxGatherers: ${field.maxGatherers},\n`)
+    print(`  size: ${JSON.stringify(field.size)}\n`)
+    print(`}\n`)
+
     const allStrips = []
     for (const [edgeId, oul] of dropsite.rect.edges.entries()) {
         const v = oul[1].perpendicular().mult(-vl / oul[2])
@@ -729,240 +1146,60 @@ export function fieldPlacements(dropsite, obstructions, field, svg) {
         const suu = field.size[0] * ul
         const euu = extension * ul
         const ueu = (oul[2] + extension) * ul
-        areas.push(Rect.fromOUV(o, [u, ul], [v, vl]))
         for (const strip of TrapezoidalStrip.forFields(o, [u, ul], [v, vl], obstructions, field, svg)) {
-            allStrips.push([edgeId, strip, TrapezoidalStrip.exhaust(edgeId, strip, suu, euu, ueu, ul, vl)])
+            allStrips.push([edgeId, strip, TrapezoidalStrip.exhaust(edgeId, strip, field, suu, euu, ueu, ul, vl)])
         }
-    }
-    if (svg) {
-        obstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))
-                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "black", 1))
-        obstructions.filter(obs => areas.some(area => !obs.disjoint(area)))
-                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1))
     }
     print("geom field placements trapezoidal decomposition finished\n")
-
-    const corners = [[], [], [], []]
-    const consistent = corner => {
-        if (corner.length <= 1) return true
-        guarantees(corner.length == 2, "at most two sides touching one corner")
-        guarantees(corner.every(([style]) => style == 1 || style == 2), "corner has 2 styles only")
-        if (corner[0][0] == corner[1][0]) return false
-        if (corner[0][0] == 1) {
-            return corner[0][1] < corner[1][1] - field.size[0]
-        } else {
-            return corner[0][1] - field.size[0] > corner[1][1]
+    for (const [stripId, [edgeId, strip, exhausts]] of allStrips.entries()) {
+        print(`strip ${stripId} on edge ${edgeId}: ${JSON.stringify(strip)}\n`)
+        for (const exhaust of exhausts) {
+            print(`    ${JSON.stringify(exhaust)}\n`)
         }
     }
+
     let best = [0, 0]
-    const f = (stripId, total, penalty, seq, loopback) => {
-        // print(`geom field placements f ${stripId}\n`)
+    let iteration = 0
+    let breakpoint = null
+    const branch = (stripId, total, constraints) => {
+        if (iteration == breakpoint) return
+        const consistent = Constraint.consistent(constraints)
+        if (!consistent) return
         if (stripId == allStrips.length) {
-            if (loopback) {
-                stripId = 0
-            } else {
-                if (total > best[0] || total == best[0] && penalty < best[1]) {
-                    best = [total, penalty, seq]
-                }
-                return
-            }
-        }
-        const [edgeId, , exhausts] = allStrips[stripId]
-        for (const [n, style, s] of exhausts) {
-            if (style == 6) {
-                // No consecutive 6 are allowed.
-                if (stripId == 1) {
-                    if (loopback) continue
-                    guarantees(seq.at(-1)[0] != 6, "it is not 6")
-                } else if (stripId >= 2) {
-                    if (seq.at(-1)[0] == 6) continue
-                }
-
-                if (stripId == 0 && !loopback) {
-                    // This style is extension on both sides, the strip can
-                    // slide with absolute freedom.  We want to process
-                    // everything else to contraint this freedom, then come back
-                    // to process it.
-                    f(stripId + 1, total, penalty, seq, true)
-                } else {
-                    const [roomBegin, roomEnd, ext] = s
-                    if (corners[edgeId].length > 0 && corners[edgeId][0] != 2) return
-                    if (corners[edgeId + 1 & 3].length > 0 && corners[edgeId + 1 & 3][0] != 2) return
-                    const begin = Math.min(roomBegin, corners[edgeId].length > 0 ? corners[edgeId][1] : Infinity)
-                    const end = Math.min(roomEnd, corners[edgeId + 1 & 3].length > 0 ? corners[edgeId + 1 & 3][1] : Infinity)
-                    if (begin + end > ext) {
-                        corners[edgeId].push([1, begin])
-                        corners[edgeId + 1 & 3].push([1, ext - begin])
-                        if (stripId == 0) {
-                            guarantees(loopback, "loopback done")
-                            if (total > best[0] || total == best[0] && penalty < best[1]) {
-                                best = [total, penalty, [[6, n, begin, ext - begin]].concat(seq)]
-                            }
-                        } else {
-                            f(stripId + 1, total + n, penalty, seq.concat([[6, n, begin, ext - begin]]), loopback)
-                        }
-                        corners[edgeId].pop()
-                        corners[edgeId + 1 & 3].pop()
+            iteration++
+            if (breakpoint != null) {
+                const [penalty, centers] = Constraint.consolidate(dropsite.rect.edges, field, consistent, allStrips)
+                print(`iteration ${iteration}, total ${total}, penalty ${penalty}\n`)
+                if (iteration == breakpoint) {
+                    for (const [stripId, constraint] of constraints.entries()) {
+                        print(`constraint ${stripId} ${JSON.stringify(constraint)}\n`)
                     }
-                }
-                continue
-            }
-            if (stripId == 0 && loopback) continue
-            if (style == 0) {
-                f(stripId + 1, total + n, penalty, seq.concat([[0, n]]), loopback)
-            } else if (style == 1) {
-                const [cornerId, ext] = s
-                corners[cornerId].push([1, ext])
-                if (consistent(corners[cornerId])) {
-                    f(stripId + 1, total + n, penalty, seq.concat([[1, n, cornerId, ext]]), loopback)
-                }
-                corners[cornerId].pop()
-            } else if (style == 2) {
-                const [cornerId, h, t] = s
-                corners[cornerId].push([2, h])
-                if (consistent(corners[cornerId])) {
-                    f(stripId + 1, total + n, penalty + h, seq.concat([[2, n, cornerId, h, t]]), loopback)
-                }
-                corners[cornerId].pop()
-            } else if (style == 3) {
-                const [h, t, ext] = s
-                corners[edgeId].push([2, h])
-                corners[edgeId + 1 & 3].push([1, ext])
-                if (consistent(corners[edgeId]) && consistent(corners[edgeId + 1 & 3])) {
-                    f(stripId + 1, total + n, penalty + h, seq.concat([[3, n, h, t, ext]]), loopback)
-                }
-                corners[edgeId].pop()
-                corners[edgeId + 1 & 3].pop()
-            } else if (style == 4) {
-                const [h0, t0, h1, t1] = s
-                corners[edgeId].push([2, h0])
-                corners[edgeId + 1 & 3].push([2, h1])
-                if (consistent(corners[edgeId]) && consistent(corners[edgeId + 1 & 3])) {
-                    f(stripId + 1, total + n, penalty + h0 + h1, seq.concat([[4, n, h0, t0, h1, t1]]), loopback)
-                }
-                corners[edgeId].pop()
-                corners[edgeId + 1 & 3].pop()
-            } else {
-                guarantees(style == 5, `5 + 1 styles only; got ${style}`)
-                const [ext, h, t] = s
-                corners[edgeId].push([1, ext])
-                corners[edgeId + 1 & 3].push([2, h])
-                if (consistent(corners[edgeId]) && consistent(corners[edgeId + 1 & 3])) {
-                    f(stripId + 1, total + n, penalty + h, seq.concat([[5, n, ext, h, t]]), loopback)
-                }
-                corners[edgeId].pop()
-                corners[edgeId + 1 & 3].pop()
-            }
-        }
-    }
-    f(0, 0, 0, [], false)
-    print("geom field placements recursion finished\n")
-    guarantees(best[2].length == allStrips.length, "seq is allStrips companion")
-    print(`best: ${best[0]} penalty: ${best[1]}\n`)
-    print(JSON.stringify(best[2]) + "\n")
-    const centers = []
-    for (const [stripId, [edgeId, strip]] of allStrips.entries()) {
-        const oul = dropsite.rect.edges[edgeId]
-        const v = oul[1].perpendicular().mult(-vl / oul[2])
-        const ul = oul[2] + 2 * extension
-        const uu = ul * ul
-        const u = Vector2D.mult(oul[1], ul / oul[2])
-        const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
-        const suu = field.size[0] * ul
-        const euu = extension * ul
-        const ueu = (oul[2] + extension) * ul
-        const [style, n] = best[2][stripId]
-        const addLowest = t => {
-            for (const [t0, l0, h0, t1, l1, h1] of strip) {
-                if (t0 <= t && t <= t1) {
-                    const p = (t1 - t) / (t1 - t0)
-                    const l = l0 * p + l1 * (1 - p) + svv / 2
-                    centers.push(Vector2D.mult(u, (t + suu / 2) / uu).add(Vector2D.mult(v, l / vv)).add(o))
+                    best = [total, penalty, centers]
                     return
                 }
             }
-            warn(`did not catch: t = ${t / ul}, stripId = ${stripId}, edgeId = ${edgeId}, t0 = ${strip[0][0] / ul}, t9 = ${strip.at(-1)[3] / ul}, ueu - suu = ${(ueu - suu) / ul}`)
+
+            if (total < best[0]) return
+            const [penalty, centers] = Constraint.consolidate(dropsite.rect.edges, field, consistent, allStrips)
+            if (total > best[0] || total == best[0] && penalty < best[1]) {
+                best = [total, penalty, centers]
+                print(`subbest ${iteration} total ${total}, penalty ${penalty}\n`)
+                for (const [stripId, constraint] of constraints.entries()) {
+                    print(`constraint ${stripId} ${JSON.stringify(constraint)}\n`)
+                }
+            }
+            return
         }
-        if (style == 0) {
-            const sepuu = (Math.min(strip.at(-1)[3] + suu, ueu) - Math.max(strip[0][0], euu) - n * suu) / (n + 1)
-            for (let i = 0; i < n; i++) {
-                addLowest(Math.max(strip[0][0], euu) + sepuu + i * (sepuu + suu))
-            }
-        } else if (style == 1) {
-            const [, , cornerId, ext] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (cornerId == edgeId) {
-                    addLowest(Math.min(strip.at(-1)[3], ueu - suu) - i * suu)
-                } else {
-                    guarantees(cornerId == (edgeId + 1 & 3), `edge affect two corners only: style = ${style}, cornerId = ${cornerId}, edgeId = ${edgeId}`)
-                    addLowest(Math.max(strip[0][0], euu) + i * suu)
-                }
-            }
-        } else if (style == 2) {
-            // TODO: magnet
-            const [, , cornerId, h, t] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (cornerId == edgeId) {
-                    if (i == 0) {
-                        centers.push(Vector2D.mult(u, (t + suu / 2) / uu).add(Vector2D.mult(v, (h - field.size[0] / 2) / vl)).add(o))
-                    } else {
-                        addLowest(t + i * suu)
-                    }
-                } else {
-                    guarantees(cornerId == (edgeId + 1 & 3), `edge affect two corners only: style = ${style}, cornerId = ${cornerId}, edgeId = ${edgeId}`)
-                    if (i == 0) {
-                        centers.push(Vector2D.mult(u, (t + suu / 2) / uu).add(Vector2D.mult(v, (h - field.size[0] / 2) / vl)).add(o))
-                    } else {
-                        addLowest(t - i * suu)
-                    }
-                }
-            }
-        } else if (style == 3) {
-            const [, , h, t, ext] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (i == 0) {
-                    centers.push(Vector2D.mult(u, (t + suu / 2) / uu).add(Vector2D.mult(v, (h - field.size[0] / 2) / vl)).add(o))
-                } else {
-                    addLowest(t + i * suu)
-                }
-            }
-        } else if (style == 4) {
-            const [, , h0, t0, h1, t1] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (i == 0) {
-                    centers.push(Vector2D.mult(u, (t0 + suu / 2) / uu).add(Vector2D.mult(v, (h0 - field.size[0] / 2) / vl)).add(o))
-                } else if (i == n - 1) {
-                    centers.push(Vector2D.mult(u, (t1 + suu / 2) / uu).add(Vector2D.mult(v, (h1 - field.size[0] / 2) / vl)).add(o))
-                } else {
-                    addLowest(t0 + i * suu)
-                }
-            }
-        } else if (style == 5) {
-            const [, , ext, h, t] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (i == 0) {
-                    centers.push(Vector2D.mult(u, (t + suu / 2) / uu).add(Vector2D.mult(v, (h - field.size[0] / 2) / vl)).add(o))
-                } else {
-                    addLowest(t - i * suu)
-                }
-            }
-        } else {
-            guarantees(style == 6, "6 styles only")
-            const [, , begin, end] = best[2][stripId]
-            for (let i = 0; i < n; i++) {
-                if (i == 0 && euu - begin * ul < strip[0][0]) {
-                    // precision error special case
-                    warn(`precision error special case: ${euu - begin* ul} vs ${strip[0][0]}`)
-                    addLowest(strip[0][0])
-                } else if (i == n - 1) {
-                    addLowest(ueu + end * ul - suu)
-                } else {
-                    addLowest(euu - begin * ul + i * suu)
-                }
-            }
+        const [edgeId, , exhausts] = allStrips[stripId]
+        for (const constraint of exhausts) {
+            print(`branch ${stripId} ${JSON.stringify(constraint)}\n`)
+            branch(stripId + 1, total + constraint.n, constraints.concat([constraint]))
         }
     }
-    for (const p of centers) {
-        svg.rect(Rect.fromCenter(p, field.size, dropsite.angle, dropsite.cos, -0.05), "blue")
+    branch(0, 0, [])
+    print(`best: ${best[0]} penalty: ${best[1]}\n`)
+
+    for (const p of best[2]) {
+        svg.rect(Rect.fromCenter(p, field.size, dropsite.angle, dropsite.cos, -0.05), "blue", 0.8)
     }
 }

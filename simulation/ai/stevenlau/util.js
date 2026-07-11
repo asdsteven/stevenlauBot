@@ -57,6 +57,7 @@ export class SVGPrinter {
 
     print() {
         print(`<svg width="1000" height="1000" version="1.1" xmlns="http://www.w3.org/2000/svg">`)
+        print(`<rect width="100%" height="100%" fill="palegreen" />`)
         this.s.forEach(s => print(s))
         print("</svg>\n")
     }
