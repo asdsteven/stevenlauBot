@@ -902,15 +902,16 @@ class TrapezoidalStrip {
                     sweepline = [t2, l2, h2]
                 }
             } else if (h17 - l17 > svv) {
-                const t = t2 - (t2 - t1) * (svv - (h28 - l28)) / (h17 - l17 - (h28 - l28))
-                const p = (t2 - t) / (t2 - t1)
+                const p = (svv - (h28 - l28)) / (h17 - l17 - (h28 - l28))
+                const t = lerp(t1, t2, p)
                 const l = lerp(l17, l28, p)
                 const h = lerp(h17, h28, p)
+                guarantees(t > t1, "otherwise would loop forever")
                 strips.push([t1, l17, h17, t, l, h])
                 sweepline = [t, l, h]
             } else if (h28 - l28 > svv) {
-                const t = t1 + (t2 - t1) * (svv - (h17 - l17)) / (h28 - l28 - (h17 - l17))
-                const p = (t2 - t) / (t2 - t1)
+                const p = (svv - (h17 - l17)) / (h28 - l28 - (h17 - l17))
+                const t = lerp(t2, t1, p)
                 const l = lerp(l17, l28, p)
                 const h = lerp(h17, h28, p)
                 strips.push([t, l, h, t2, l28, h28])
