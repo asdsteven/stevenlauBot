@@ -42,64 +42,35 @@ export class Eye {
 
     terrainObstructions([x0, x1], [z0, z1]) {
         const TERRAIN_TILES = 4
-        const EDGE_TILES = 3
-        const obstructions = []
         const cmpTerrain = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_Terrain)
         const s = cmpTerrain.GetMapSize()
-        const bound0 = x => Math.max(0, Math.floor(x / TERRAIN_TILES) * TERRAIN_TILES)
-        const bound1 = x => Math.min(s, Math.ceil(x / TERRAIN_TILES) * TERRAIN_TILES)
-        ;[x0, x1] = [bound0(x0), bound1(x1)]
-        ;[z0, z1] = [bound0(z0), bound1(z1)]
+        return geom.tileObstructions([x0, x1], [z0, z1], s, TERRAIN_TILES, (i, j) => {
+            const heights = [cmpTerrain.GetGroundLevel(i, j),
+                             cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j),
+                             cmpTerrain.GetGroundLevel(i, j + TERRAIN_TILES),
+                             cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j + TERRAIN_TILES)]
+            const slope = (Math.max(...heights) - Math.min(...heights)) / TERRAIN_TILES
+            return slope >= 1
+        })
+    }
+
+    edgeObstructions([x0, x1], [z0, z1]) {
+        const TERRAIN_TILES = 4
+        const EDGE_TILES = 3
+        const cmpTerrain = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_Terrain)
+        const s = cmpTerrain.GetMapSize()
         const radius2 = Math.square(s - 2 * EDGE_TILES * TERRAIN_TILES)
-        const prev = []
-        const commit = ([i0, i1, j0, j1]) =>
-            obstructions.push(geom.Rect.fromCenter(new Vector2D((i0 + i1) / 2, (j0 + j1) / 2),
-                                                     [i1 - i0, j1 - j0], 0, 1, 0))
-        const extend = (i01s, i0, i1) => {
-            if (i01s.length == 0 || i01s.at(-1)[1] < i0)
-                i01s.push([i0, i1])
-            else
-                i01s.at(-1)[1] = i1
-        }
-        for (let j = z0; j < z1; j += TERRAIN_TILES) {
-            const row = []
-            for (let dj = 0; dj < TERRAIN_TILES; dj++)
-                row.push([])
-            for (let i = x0; i < x1; i += TERRAIN_TILES) {
-                const heights = [cmpTerrain.GetGroundLevel(i, j),
-                                 cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j),
-                                 cmpTerrain.GetGroundLevel(i, j + TERRAIN_TILES),
-                                 cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j + TERRAIN_TILES)]
-                const slope = (Math.max(...heights) - Math.min(...heights)) / TERRAIN_TILES
-                if (slope >= 1) {
-                    for (let dj = 0; dj < TERRAIN_TILES; dj++)
-                        extend(row[dj], i, i + TERRAIN_TILES)
-                    continue
-                }
-                for (let dj = 0; dj < TERRAIN_TILES; dj++)
-                    for (let di = 0; di < TERRAIN_TILES; di++) {
-                        const dist2 = Math.euclidDistance2DSquared(s, s, (i + di) * 2 + 1, (j + dj) * 2 + 1)
-                        if (dist2 < radius2) continue
-                        extend(row[dj], i + di, i + di + 1)
-                    }
-            }
-            for (let dj = 0; dj < TERRAIN_TILES; dj++) {
-                let p = 0
-                for (const [i0, i1] of row[dj]) {
-                    while (p < prev.length && prev[p][0] < i0)
-                        prev.splice(p, 1).forEach(commit)
-                    if (p < prev.length && prev[p][0] == i0 && prev[p][1] == i1) {
-                        prev[p][3] = j + dj + 1
-                    } else {
-                        while (p < prev.length && prev[p][0] < i1)
-                            prev.splice(p, 1).forEach(commit)
-                        prev.splice(p, 0, [i0, i1, j + dj, j + dj + 1])
-                    }
-                }
-            }
-        }
-        prev.forEach(commit)
-        return obstructions
+        return geom.tileObstructions([x0, x1], [z0, z1], s, 1, (i, j) =>
+            Math.euclidDistance2DSquared(s, s, i * 2 + 1, j * 2 + 1) >= radius2)
+    }
+
+    territoryObstructions([x0, x1], [z0, z1]) {
+        const TERRITORY_TILES = 8
+        const cmpTerrain = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_Terrain)
+        const s = cmpTerrain.GetMapSize()
+        const cmpTerritoryManager = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_TerritoryManager)
+        return geom.tileObstructions([x0, x1], [z0, z1], s, TERRITORY_TILES, (i, j) =>
+            cmpTerritoryManager.GetOwner(i, j) == this.playerID)
     }
 
     scanEntities() {
@@ -167,7 +138,9 @@ export class Eye {
             const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(0)),
                                                 cc.stones.map(e => e.obstruction(0)),
                                                 cc.structures.flatMap(e => e.obstructions(0)))
-            const terrainObstructions = this.terrainObstructions([cc.pos().x - 1000, cc.pos().x + 1000], [cc.pos().y - 1000, cc.pos().y + 1000])
+            const terrainObstructions = this.terrainObstructions([0, 768], [0, 768])
+            const edgeObstructions = this.edgeObstructions([0, 768], [0, 768])
+            const territoryObstructions = this.territoryObstructions([0, 768], [0, 768])
             const svg = new util.SVGPrinter()
             cc.trees.forEach(e => svg.rect(e.obstruction(0), "green"))
             cc.fruits.forEach(e => svg.rect(e.obstruction(0), "red"))
@@ -175,6 +148,8 @@ export class Eye {
             placements.fields = geom.fieldPlacements(cc, fieldObstructions, {maxGatherers: field.maxGatherers, size: field.size.map(x => x + 0.05)}, svg)
                 .map(pos => new geom.Placement(field, pos, cc.angle, cc.cos))
             terrainObstructions.forEach(r => svg.rect(r, "silver"))
+            edgeObstructions.forEach(r => svg.rect(r, "grey", 0.5))
+            territoryObstructions.forEach(r => svg.rect(r, "blue", 0.5))
 
             // const svg = new util.SVGPrinter()
             // placements.fields = geom.fieldPlacements(mockDropsite, mockObstructions, mockField, svg)

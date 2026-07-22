@@ -54,6 +54,41 @@ export class Rect {
     }
 }
 
+export function tileObstructions([x0, x1], [z0, z1], s, d, pred) {
+    [x0, x1, z0, z1] = [Math.floor(x0 / d),
+                        Math.ceil(x1 / d),
+                        Math.floor(z0 / d),
+                        Math.ceil(z1 / d)].map(x => Math.min(Math.max(0, x * d), s))
+    const ijs = []
+    const prev = []
+    for (let j = z0; j < z1; j += d) {
+        const row = []
+        for (let i = x0; i < x1; i += d) {
+            if (!pred(i, j)) continue
+            if (row.length == 0 || row.at(-1)[1] < i)
+                row.push([i, i + d])
+            else
+                row.at(-1)[1] = i + d
+        }
+        for (const [i0, i1] of row) {
+            let p = 0
+            while (p < prev.length && prev[p][0] < i0)
+                ijs.push(...prev.splice(p, 1))
+            if (p < prev.length && prev[p][0] == i0 && prev[p][1] == i1) {
+                prev[p][3] = j + d
+            } else {
+                while (p < prev.length && prev[p][0] < i1)
+                    ijs.push(...prev.splice(p, 1))
+                prev.splice(p, 0, [i0, i1, j, j + d])
+            }
+        }
+    }
+    ijs.push(...prev)
+    return ijs.map(([i0, i1, j0, j1]) =>
+        Rect.fromCenter(new Vector2D((i0 + i1) / 2, (j0 + j1) / 2),
+                        [i1 - i0, j1 - j0], 0, 1, 0))
+}
+
 function vectorIntersection(u, p, w) {
     // au = p + bw, find a
     // aux = px + bwx | bwx = aux - px
