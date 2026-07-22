@@ -1,7 +1,6 @@
 // See with eye, do with hand.
 
 import * as geom from "simulation/ai/stevenlau/geom.js"
-import { dd } from "simulation/ai/stevenlau/util.js"
 import * as util from "simulation/ai/stevenlau/util.js"
 
 export class Brain {
@@ -17,7 +16,7 @@ export class Brain {
                 /* const farmstead = this.eye.ccs[0].placements.firstFarmstead
                  * this.preConstructs.add(farmstead) */
                 this.hand.write(`Hello, I am difficulty:${this.eye.difficulty} ${this.eye.behavior} player:${this.eye.playerID}!`)
-                this.hand.write(`I can build ${fields.length} fields total ${dd(fields.sumGap)} away from cc.`)
+                this.hand.write(`I can build ${fields.length} fields total ${fields.length} away from cc.`)
             } else if (event == "chat") {
                 this.hand.write(data)
             } else if (event == "new own entity") {

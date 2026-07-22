@@ -1,10 +1,6 @@
-export function dd(x) {
-    return Math.round(x * 100) / 100
-}
-
 export function entitywhxya(e) {
     const degree = Math.round(180 * e.angle / Math.PI)
-    return `${dd(e.template.size[0])}x${dd(e.template.size[1])}+${dd(e.position[0])}+${dd(e.position[1])}o${degree}`
+    return `${e.template.size[0].toFixed(2)}x${e.template.size[1].toFixed(2)}+${e.position[0].toFixed(2)}+${e.position[1].toFixed(2)}o${degree}`
 }
 
 export function sum(xs) {
@@ -27,18 +23,16 @@ export function placementResult(template, {x, y: z}, angle, playerID) {
 }
 
 export class SVGPrinter {
-    constructor([x, z]) {
-        this.x = x
-        this.z = z
+    constructor() {
         this.s = []
     }
 
     dx(x) {
-        return dd(500 + (x - this.x) * 3)
+        return (100 + x * 3).toFixed(2)
     }
 
     dz(z) {
-        return dd(500 - (z - this.z) * 3)
+        return (100 + (768 - z) * 3).toFixed(2)
     }
 
     rect(r, fill = "black", opacity = 1, s = null) {
@@ -47,7 +41,7 @@ export class SVGPrinter {
 
     corners(cs, fill = "black", opacity = 1, s = null) {
         const t = cs.map(([x, z]) => `${this.dx(x)} ${this.dz(z)}`)
-        this.s.push(`<polyline points="${t}" stroke="none" fill="${fill}" opacity="${dd(opacity)}" />`)
+        this.s.push(`<polygon points="${t}" stroke="none" fill="${fill}" opacity="${opacity.toFixed(2)}" />`)
         if (s) this.text(cs[0], s)
     }
 
@@ -56,7 +50,7 @@ export class SVGPrinter {
     }
 
     print() {
-        print(`<svg width="1000" height="1000" version="1.1" xmlns="http://www.w3.org/2000/svg">`)
+        print(`<svg width="2504" height="2504" version="1.1" xmlns="http://www.w3.org/2000/svg">`)
         print(`<rect width="100%" height="100%" fill="palegreen" />`)
         this.s.forEach(s => print(s))
         print("</svg>\n")

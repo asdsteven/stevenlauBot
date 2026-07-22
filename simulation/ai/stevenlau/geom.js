@@ -70,52 +70,6 @@ function vectorIntersection(u, p, w) {
     return false
 }
 
-// List of rects like [au, bu], [au, bu], ...
-export class Strip {
-    constructor(o, [u, ul], [v, vl]) {
-        this.o = o
-        this.u = u
-        this.ul = ul
-        this.v = v
-        this.vl = vl
-        this.clips = [[0, 1]]
-    }
-
-    obstructedClip(obstruction) {
-        const ks = obstruction.edges.flatMap(([p, w, wl]) => {
-            const op = Vector2D.sub(p, this.o)
-            const ku = Vector2D.dot(op, this.u) / this.ul
-            const kv = Vector2D.dot(op, this.v) / this.vl
-            return [0 < ku && ku < this.ul && 0 < kv && kv < this.vl && ku / this.ul,
-                    vectorIntersection(this.v, op, w) !== false && 0,
-                    vectorIntersection(this.v, Vector2D.sub(op, this.u), w) !== false && 1,
-                    vectorIntersection(this.u, op, w),
-                    vectorIntersection(this.u, Vector2D.sub(op, this.v), w)].filter(k => k !== false)
-        })
-        return [Math.min(...ks), Math.max(...ks)]
-    }
-
-    obstruct(obstructions) {
-        this.clips = []
-        let k = 0
-        obstructions.map(obs => this.obstructedClip(obs))
-                    .filter(([a, b]) => a < b)
-                    .sort(([a1], [a2]) => a1 - a2)
-                    .forEach(([a, b]) => {
-                        if (k < a) this.clips.push([k, a])
-                        if (k < b) k = b
-                    })
-        if (k < 1) this.clips.push([k, 1])
-        return this
-    }
-
-    rects() {
-        return this.clips.map(([a, b]) =>
-            Rect.fromOUV(Vector2D.mult(this.u, a).add(this.o),
-                         [Vector2D.mult(this.u, b - a), b - a], [this.v, this.vl]))
-    }
-}
-
 export class Placement {
     constructor(template, position, angle, cos) {
         this.template = template
@@ -140,114 +94,6 @@ export class Placement {
     rect() {
         return Rect.fromCenter(this.position, this.template.size, this.angle, this.cos, 0)
     }
-}
-
-export function fieldStrips(field, extendEnds, dropsite, obstructions, gap, eps) {
-    if (field.size[0] != field.size[1]) throw `field is not a square: ${field.size[0]}x${field.size[1]}`
-    const size = field.size[0]
-
-    // We first leave a small gap between field and dropsite to pack
-    // as many fields as possible.  This number comes from the fact
-    // that each farmer is a 0.8 x 0.8 square and they can farm or
-    // drop when they are within 2m from target.  After calculating
-    // the max number of fields, we would shrink the gap.
-    // const gap = (0.8 + 2) * 2 - 2 * eps
-
-    // We allow some part of a field to extend beyond the width of the
-    // dropsite.  We still set a limit so that there is enough space
-    // for all farmers to farm within the width of dropsite so that
-    // they do not have to walk to drop resources.  17.47 for most
-    // civ, 15.73 for Han.
-    const extension = size - 0.8 * Math.sqrt(2) * (field.maxGatherers - 1) - eps
-
-    return dropsite.rect.edges.map(([o, u, ul], i) => {
-        const extendBegin = !extendEnds[i + 3 & 3]
-        const extendEnd = extendEnds[i]
-        const begin = extendBegin ? extension : gap
-        const end = extendEnd ? extension : gap
-        const p = Vector2D.sub(o, Vector2D.mult(u, begin / ul))
-                          .sub(u.perpendicular().mult(eps / ul))
-        const w = Vector2D.mult(u, 1 + (begin + end) / ul)
-        const wl = begin + ul + end
-        const v = u.perpendicular().mult(-(gap + size) / ul)
-        return [new Strip(p, [w, wl], [v, gap + size]).obstruct(obstructions),
-                [begin, extendBegin], [begin + ul, extendEnd]]
-    })
-}
-
-export function fieldPlacementsOld(field, strips, eps) {
-    if (field.size[0] != field.size[1]) throw `field is not a square: ${field.size[0]}x${field.size[1]}`
-    const size = field.size[0]
-    const edges = strips.map(([strip, [begin, extendBegin], [end, extendEnd]]) =>
-        [strip, [begin, extendBegin], [end, extendEnd],
-         strip.clips.map(([a, b]) => {
-             a *= strip.ul
-             b *= strip.ul
-             const n = Math.floor((b - a + size) / (size + eps)) - 1
-             if (n <= 0) return [0, null, null, null]
-             const evenSep = (a, b) => [n, a, b, (b - a - n * size) / (n + 1)]
-             const tight = n * size + (n + 1) * eps
-             const tightFrom = a => [n, a, a + tight, eps]
-             if (begin < a && b < end) {
-                 // We are well inside.  Just distribute evenly.
-                 return evenSep(a, b)
-             } else if (b < end) {
-                 if (begin < b - tight) {
-                     // Can be well inside.  Distribute evenly.
-                     return evenSep(begin, b)
-                 } else {
-                     // Have to extend anyway.  Gravity to b.
-                     return tightFrom(b - tight)
-                 }
-             } else if (begin < a) {
-                 if (a + tight < end) {
-                     // Can be well inside.  Distribute evenly.
-                     return evenSep(a, end)
-                 } else {
-                     // Have to extend anyway.  Gravity to a.
-                     return tightFrom(a)
-                 }
-             } else if (tight < end - begin) {
-                 // Can be well inside.  Distribute evenly.
-                 return evenSep(begin, end)
-             } else if (extendBegin == extendEnd) {
-                 // Both ends are of same type, gravity center.
-                 const x = tight - (end - begin)
-                 return tightFrom(begin - x / 2)
-             } else if (extendBegin) {
-                 // Get rid of end gap.
-                 return tightFrom(Math.max(a, end - tight))
-             } else {
-                 // Get rid of begin gap.
-                 return tightFrom(Math.min(b - tight, begin))
-             }
-    })])
-    return edges.flatMap(([strip, [begin, extendBegin], [end, extendEnd], clips], i) => clips.flatMap(([n, a, b, sep]) => {
-        if (n == 0) return []
-        const prevEdge = edges[i + 3 & 3]
-        const [, , [prevEnd, prevExtend]] = prevEdge
-        const nextEdge = edges[i + 1 & 3]
-        const [, [nextBegin, nextExtend]] = nextEdge
-        const ps = []
-        for (let j = 0; j < n; j++) {
-            const k = a + sep + size / 2 + j * (sep + size)
-            let gap = 0
-            if (k - size / 2 < begin && !prevExtend) {
-                const prevClips = prevEdge.at(-1)
-                const [, , prevB] = prevClips.at(-1)
-                gap = Math.max(0, prevB - prevEnd)
-            } else if (k + size / 2 > end && !nextExtend && extendEnd) {
-                // if not extendEnd, the next edge should escape for me.
-                const nextClips = nextEdge.at(-1)
-                const [, nextA] = nextClips[0]
-                gap = Math.max(0, nextBegin - nextA)
-            }
-            ps.push([Vector2D.add(Vector2D.mult(strip.v, (gap + size / 2) / strip.vl),
-                                  Vector2D.mult(strip.u, k / strip.ul)).add(strip.o),
-                     gap])
-        }
-        return ps
-    }))
 }
 
 export function firstFarmsteadPlacement(farmstead, fields, cc, fruits, obstructions, eps) {
@@ -288,6 +134,44 @@ function lerp(a, b, p) {
     const l = Math.min(a, b)
     const h = Math.max(a, b)
     return Math.min(Math.max(a * p + b * (1 - p), l), h)
+}
+
+class Trapezium {
+    constructor([u, uh], [v, vh]) {
+        guarantees(u.x < v.x && uh > 0 && vh > 0, `Trapezium width and heights must be positive: ${u.x} < ${v.x}, ${uh} > 0, ${vh} > 0`)
+        this.u = u
+        this.uh = uh
+        this.v = v
+        this.vh = vh
+    }
+
+    get uv() {
+        return Vector2D.sub(this.v, this.u)
+    }
+
+    contains(x) {
+        return this.u.x <= x && x <= this.v.x
+    }
+
+    split(x) {
+        guarantees(this.contains(x), `Trapezium split [${this.u.x}, ${this.v.x}] does not contain ${x}`)
+        const p = (this.v.x - x) / this.uv.x
+        guarantees(0 <= p && p <= 1, `Trapezium split invalid p: 0 <= (${this.v.x} - ${x}) / ${this.uv.x} <= 1`)
+        const m = new Vector2D(lerp(this.u.x, this.v.x, p),
+                               lerp(this.u.y, this.v.y, p))
+        const mh = lerp(this.uh, this.vh, p)
+        return [new Trapezium([this.u, this.uh], [m, mh]),
+                new Trapezium([m, mh], [this.v, this.vh])]
+    }
+}
+
+function trapezoidalDecomposition(o, [u, ul], [v, vl], obstructions, svg) {
+    const enters = new Map()
+    const leaves = new Map()
+    for (const a of obstructions) {
+        for (const b of obstructions) {
+        }
+    }
 }
 
 class Slope {
@@ -637,19 +521,18 @@ class TrapezoidalStrip {
         if (svg) {
             const uu = ul * ul
             const vv = vl * vl
+            for (const [t0, l0, h0, t1, l1, h1] of trapeziums) {
+                svg.corners([
+                    Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
+                    Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
+                    Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
+                    Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
+                ].map(({x,y}) => [x,y]), "green", 0.7)
+            }
             let i = 0
-            // for (const [t0, l0, h0, t1, l1, h1] of trapeziums) {
-            //     svg.corners([
-            //         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
-            //         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
-            //         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
-            //         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
-            //     ].map(({x,y}) => [x,y]), "green", i % 2 == 0 ? 0.8 : 0.7)
-            //     i += 1
-            // }
-            i = 0
             for (const strip of strips) {
                 for (const slit of strip) {
+                    continue
                     const [t1, l17, h17, t2, l28, h28] = slit
                     if (t2 / uu <= t1 / uu + field.size[0] / ul) {
                         svg.corners([
@@ -780,17 +663,17 @@ class TrapezoidalStrip {
                               .filter(([y0, , y1]) => y0 - vv + y1 - vv < 0)
                               .concat([[0, 0, 0]])
                               .sort(([l0, , l1], [h0, , h1]) => l0 - h0 + l1 - h1)
-            if (svg) {
-                /* for (const [j, [l0, d, l1]] of ydys.entries()) {
-                 *     const [h0, , h1] = ydys[j + 1] || [vv, 0, vv]
-                 *     svg.corners([
-                 *         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
-                 *         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
-                 *         Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
-                 *         Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
-                 *     ].map(({x,y}) => [x,y]), j % 2 == 0 ? "blue" : "orange", 0.5)
-                 * } */
-            }
+            // if (svg) {
+            //     for (const [j, [l0, d, l1]] of ydys.entries()) {
+            //         const [h0, , h1] = ydys[j + 1] || [vv, 0, vv]
+            //         svg.corners([
+            //             Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, l0 / vv)),
+            //             Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, l1 / vv)),
+            //             Vector2D.mult(u, t1 / uu).add(o).add(Vector2D.mult(v, h1 / vv)),
+            //             Vector2D.mult(u, t0 / uu).add(o).add(Vector2D.mult(v, h0 / vv))
+            //         ].map(({x,y}) => [x,y]), j % 2 == 0 ? "blue" : "orange", 0.5)
+            //     }
+            // }
 
             let count = 0
             for (const [j, [l0, d, l1]] of ydys.entries()) {
@@ -989,30 +872,6 @@ class TrapezoidalStrip {
             if (m == n) return s
             guarantees(m == n + 1 || m == n + 2, "at most two fields extend")
 
-            // Only extend / rise begin.
-            // const beginT = ueu - (n + 1) * suu
-            // if (beginT >= t0) {
-            //     s.push(Constraint.ext(n + 1, edgeId, ((n + 1) * suu - (ueu - euu)) / ul))
-            //     const [h, ht] = strip.map(Slope.fromH).map(slope => {
-            //         if (slope.t0 >= beginT) return [-Infinity]
-            //         if (slope.t9 <= beginT) return slope.max()
-            //         return new Slope(slope.t0, slope.h0, beginT, slope.h(beginT)).max()
-            //     }).sort(([h0], [h1]) => h1 - h0)[0]
-            //     s.push(Constraint.rise(n + 1, edgeId, field.size[1], h / vl))
-            // }
-
-            // // Only extend / rise end.
-            // const endT = euu + n * suu
-            // if (endT <= t9) {
-            //     s.push(Constraint.ext(n + 1, edgeId + 1 & 3, ((n + 1) * suu - (ueu - euu)) / ul))
-            //     const [h, ht] = strip.map(Slope.fromH).map(slope => {
-            //         if (slope.t9 <= endT) return [-Infinity]
-            //         if (slope.t0 >= endT) return slope.max()
-            //         return new Slope(endT, slope.h(endT), slope.t9, slope.h9).max()
-            //     }).sort(([h0], [h1]) => h1 - h0)[0]
-            //     s.push(Constraint.rise(n + 1, edgeId + 1 & 3, field.size[1], h / vl, ht))
-            // }
-
             // Extend both sides.
             for (let i = n + 1; i <= m; i++) {
                 const t1 = Math.max(t0, ueu - i * suu)
@@ -1086,7 +945,7 @@ class TrapezoidalStrip {
             // print("debug case 4\n")
             guarantees(euu <= t0 && t9 <= ueu - suu, "not interfering any corners")
             const n = Math.ceil((t9 - t0) / suu)
-            return [[n, 0]]
+            return [Constraint.none(n)]
         }
     }
 }
@@ -1106,14 +965,14 @@ export function fieldPlacements(dropsite, obstructions, field, svg) {
         const o = Vector2D.mult(oul[1], -extension / oul[2]).add(oul[0])
         areas.push(Rect.fromOUV(o, [u, ul], [v, vl]))
     }
-    if (svg) {
-        // svg.rect(Rect.fromCenter(new Vector2D(...dropsite.position), dropsite.rect.edges.slice(0, 2).map(([,,l]) => l + gap * 2), dropsite.angle, dropsite.cos, 0), "black")
-        svg.rect(dropsite.rect, "silver")
-        obstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))
-                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "silver", 1))
-        obstructions.filter(obs => areas.some(area => !obs.disjoint(area)))
-                    .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1))
-    }
+    // if (svg) {
+    //     svg.rect(Rect.fromCenter(new Vector2D(...dropsite.position), dropsite.rect.edges.slice(0, 2).map(([,,l]) => l + gap * 2), dropsite.angle, dropsite.cos, 0), "black")
+    //     svg.rect(dropsite.rect, "silver")
+    //     obstructions.filter(obs => !areas.some(area => !obs.disjoint(area)))
+    //                 .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "silver", 1))
+    //     obstructions.filter(obs => areas.some(area => !obs.disjoint(area)))
+    //                 .forEach(obs => svg.corners(obs.edges.map(([p]) => [p.x,p.y]), "grey", 1))
+    // }
 
     const printVector = v => `new Vector2D(${v.x},${v.y})`
     print("geom field placements start\n")
@@ -1201,6 +1060,7 @@ export function fieldPlacements(dropsite, obstructions, field, svg) {
     print(`best: ${best[0]} penalty: ${best[1]}\n`)
 
     for (const p of best[2]) {
-        svg.rect(Rect.fromCenter(p, field.size, dropsite.angle, dropsite.cos, -0.05), "blue", 0.8)
+        svg.rect(Rect.fromCenter(p, field.size, dropsite.angle, dropsite.cos, -0.05), "yellow", 0.8)
     }
+    return best[2]
 }

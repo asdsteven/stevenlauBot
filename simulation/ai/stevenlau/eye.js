@@ -1,7 +1,6 @@
 // Tells Brain what I see.
 
 import * as util from "simulation/ai/stevenlau/util.js"
-import { dd } from "simulation/ai/stevenlau/util.js"
 import * as geom from "simulation/ai/stevenlau/geom.js"
 import { TemplateCache } from "simulation/ai/stevenlau/template.js"
 import { entitywhxya } from "simulation/ai/stevenlau/util.js"
@@ -27,13 +26,11 @@ export class Eye {
             const templateCache = this.players[entity.owner].templateCache
             const newEntity = new Entity(id, entity, templateCache)
             this.entities.set(id, newEntity)
-            if (this.timeElapsed > 0) {
-                if (newEntity.owner == this.playerID) {
+            if (this.timeElapsed > 0)
+                if (newEntity.owner == this.playerID)
                     this.see("new own entity", newEntity)
-                } else {
+                else
                     this.see("new entity", newEntity)
-                }
-            }
         }
     }
 
@@ -41,6 +38,68 @@ export class Eye {
     }
 
     updateChangedEntityTemplateInfo(id, variable, value) {
+    }
+
+    terrainObstructions([x0, x1], [z0, z1]) {
+        const TERRAIN_TILES = 4
+        const EDGE_TILES = 3
+        const obstructions = []
+        const cmpTerrain = SimEngine.QueryInterface(Sim.SYSTEM_ENTITY, Sim.IID_Terrain)
+        const s = cmpTerrain.GetMapSize()
+        const bound0 = x => Math.max(0, Math.floor(x / TERRAIN_TILES) * TERRAIN_TILES)
+        const bound1 = x => Math.min(s, Math.ceil(x / TERRAIN_TILES) * TERRAIN_TILES)
+        ;[x0, x1] = [bound0(x0), bound1(x1)]
+        ;[z0, z1] = [bound0(z0), bound1(z1)]
+        const radius2 = Math.square(s - 2 * EDGE_TILES * TERRAIN_TILES)
+        const prev = []
+        const commit = ([i0, i1, j0, j1]) =>
+            obstructions.push(geom.Rect.fromCenter(new Vector2D((i0 + i1) / 2, (j0 + j1) / 2),
+                                                     [i1 - i0, j1 - j0], 0, 1, 0))
+        const extend = (i01s, i0, i1) => {
+            if (i01s.length == 0 || i01s.at(-1)[1] < i0)
+                i01s.push([i0, i1])
+            else
+                i01s.at(-1)[1] = i1
+        }
+        for (let j = z0; j < z1; j += TERRAIN_TILES) {
+            const row = []
+            for (let dj = 0; dj < TERRAIN_TILES; dj++)
+                row.push([])
+            for (let i = x0; i < x1; i += TERRAIN_TILES) {
+                const heights = [cmpTerrain.GetGroundLevel(i, j),
+                                 cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j),
+                                 cmpTerrain.GetGroundLevel(i, j + TERRAIN_TILES),
+                                 cmpTerrain.GetGroundLevel(i + TERRAIN_TILES, j + TERRAIN_TILES)]
+                const slope = (Math.max(...heights) - Math.min(...heights)) / TERRAIN_TILES
+                if (slope >= 1) {
+                    for (let dj = 0; dj < TERRAIN_TILES; dj++)
+                        extend(row[dj], i, i + TERRAIN_TILES)
+                    continue
+                }
+                for (let dj = 0; dj < TERRAIN_TILES; dj++)
+                    for (let di = 0; di < TERRAIN_TILES; di++) {
+                        const dist2 = Math.euclidDistance2DSquared(s, s, (i + di) * 2 + 1, (j + dj) * 2 + 1)
+                        if (dist2 < radius2) continue
+                        extend(row[dj], i + di, i + di + 1)
+                    }
+            }
+            for (let dj = 0; dj < TERRAIN_TILES; dj++) {
+                let p = 0
+                for (const [i0, i1] of row[dj]) {
+                    while (p < prev.length && prev[p][0] < i0)
+                        prev.splice(p, 1).forEach(commit)
+                    if (p < prev.length && prev[p][0] == i0 && prev[p][1] == i1) {
+                        prev[p][3] = j + dj + 1
+                    } else {
+                        while (p < prev.length && prev[p][0] < i1)
+                            prev.splice(p, 1).forEach(commit)
+                        prev.splice(p, 0, [i0, i1, j + dj, j + dj + 1])
+                    }
+                }
+            }
+        }
+        prev.forEach(commit)
+        return obstructions
     }
 
     scanEntities() {
@@ -103,94 +162,23 @@ export class Eye {
 
             const placements = {}
             cc.placements = placements
-            const eps = 1 / 32
 
             const field = this.player.templateCache.getOrLoad(`structures/${this.civ}/field`)
-            const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
-                                                cc.stones.map(e => e.obstruction(eps)),
-                                                cc.fruits.map(e => e.obstruction(eps)),
-                                                cc.trees.map(e => e.obstruction(eps)),
-                                                cc.structures.flatMap(e => e.obstructions(eps)))
-            // const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(eps)),
-            //                                     cc.stones.map(e => e.obstruction(eps)),
-            //                                     cc.structures.flatMap(e => e.obstructions(eps)),
-            //                                     cc.fruits.concat(cc.trees).map(e => geom.Rect.fromCenter(e.pos(), [10,10], e.angle, e.cos, eps)))
+            const fieldObstructions = [].concat(cc.metals.map(e => e.obstruction(0)),
+                                                cc.stones.map(e => e.obstruction(0)),
+                                                cc.structures.flatMap(e => e.obstructions(0)))
+            const terrainObstructions = this.terrainObstructions([cc.pos().x - 1000, cc.pos().x + 1000], [cc.pos().y - 1000, cc.pos().y + 1000])
+            const svg = new util.SVGPrinter()
+            cc.trees.forEach(e => svg.rect(e.obstruction(0), "green"))
+            cc.fruits.forEach(e => svg.rect(e.obstruction(0), "red"))
+            fieldObstructions.forEach(r => svg.rect(r, "grey"))
+            placements.fields = geom.fieldPlacements(cc, fieldObstructions, {maxGatherers: field.maxGatherers, size: field.size.map(x => x + 0.05)}, svg)
+                .map(pos => new geom.Placement(field, pos, cc.angle, cc.cos))
+            terrainObstructions.forEach(r => svg.rect(r, "silver"))
 
-const mockDropsite = {
-  position: [380,652],
-  angle: 2.356201171875,
-  cos: -0.7071115042539267,
-  rect: new geom.Rect([new Vector2D(380.0001416924946,673.2132034351232), new Vector2D(358.7867965648768,652.0001416924945), new Vector2D(379.9998583075054,630.7867965648768), new Vector2D(401.2132034351232,651.9998583075055)],
-                      [new Vector2D(-21.2133451276178,-21.213061742628625), 30],
-                      [new Vector2D(21.213061742628625,-21.2133451276178), 30])
-}
-const mockObstructions = [
-  new geom.Rect([new Vector2D(359.98737696552774,701.0331906129202), new Vector2D(346.9668093870799,699.9873769655278), new Vector2D(348.01262303447226,686.9668093870798), new Vector2D(361.0331906129201,688.0126230344722)],
-                [new Vector2D(-13.020567578447874,-1.0458136473923316), 13.0625],
-                [new Vector2D(1.0458136473923316,-13.020567578447874), 13.0625]),
-  new geom.Rect([new Vector2D(383.4642338616232,714.9993450728671), new Vector2D(369.59786432516927,697.8389924503683), new Vector2D(380.5357661383768,689.0006549271329), new Vector2D(394.40213567483073,706.1610075496317)],
-                [new Vector2D(-13.866369536453908,-17.16035262249885), 22.0625],
-                [new Vector2D(10.937901813207482,-8.838337523235493), 14.0625]),
-  new geom.Rect([new Vector2D(405.94561569149835,625.9554220862061), new Vector2D(406.0051492028564,623.3936137383733), new Vector2D(408.56695755068915,623.4531472497314), new Vector2D(408.5074240393311,626.0149555975642)],
-                [new Vector2D(0.059533511358052446,-2.561808347832714), 2.5625],
-                [new Vector2D(2.561808347832714,0.059533511358052446), 2.5625]),
-  new geom.Rect([new Vector2D(402.632879649007,621.9488064959914), new Vector2D(402.9500582501023,619.4060119732258), new Vector2D(405.492852772868,619.723190574321), new Vector2D(405.1756741717727,622.2659850970867)],
-                [new Vector2D(0.3171786010952538,-2.542794522765703), 2.5625],
-                [new Vector2D(2.542794522765703,0.3171786010952538), 2.5625]),
-  new geom.Rect([new Vector2D(412.4766631909075,623.5617400757562), new Vector2D(415.03286441643127,623.3821807690326), new Vector2D(415.212423723155,625.9383819945563), new Vector2D(412.65622249763123,626.1179413012799)],
-                [new Vector2D(2.556201225523708,-0.1795593067236947), 2.5625],
-                [new Vector2D(0.1795593067236947,2.556201225523708), 2.5625]),
-  new geom.Rect([new Vector2D(340.3614828924475,658.541270814976), new Vector2D(339.0111583842428,659.5110800604162), new Vector2D(338.0413491388025,658.1607555522115), new Vector2D(339.3916736470072,657.1909463067713)],
-                [new Vector2D(-1.3503245082047715,0.96980924544033), 1.6625],
-                [new Vector2D(-0.96980924544033,-1.3503245082047715), 1.6625]),
-  new geom.Rect([new Vector2D(336.66168644271403,653.9668679308102), new Vector2D(336.644277088721,655.6292767747452), new Vector2D(334.98186824478597,655.6118674207523), new Vector2D(334.999277598779,653.9494585768173)],
-                [new Vector2D(-0.017409353992997086,1.6624088439350733), 1.6625],
-                [new Vector2D(-1.6624088439350733,-0.017409353992997086), 1.6625]),
-  new geom.Rect([new Vector2D(337.416364546555,663.1381663885517), new Vector2D(335.81886486144833,663.598493452805), new Vector2D(335.358537797195,662.0009937676983), new Vector2D(336.95603748230167,661.540666703445)],
-                [new Vector2D(-1.5974996851066885,0.46032706425326675), 1.6625],
-                [new Vector2D(-0.46032706425326675,-1.5974996851066885), 1.6625]),
-]
-const mockField = {
-  maxGatherers: 5,
-  size: [22,22]
-}
-
-            let svg = new util.SVGPrinter(mockDropsite.position)
-            // geom.fieldPlacements(mockDropsite, mockObstructions, mockField, svg)
-            // svg.print()
-            // placements.fields = []
-            // continue
-
-            svg = new util.SVGPrinter(cc.position)
-            geom.fieldPlacements(cc, fieldObstructions, field, svg)
-            svg.print()
-            placements.fields = []
-            continue
-
-            placements.fields = null
-            for (const gap of [0, (0.8 + 2) * 2 - 2 * eps]) {
-                for (let bits = 0; bits < 16; bits++) {
-                    const extendEnds = [1, 2, 4, 8].map(b => !!(bits & b))
-                    const strips = geom.fieldStrips(field, extendEnds, cc, fieldObstructions, gap, eps)
-                    const ps = geom.fieldPlacements(field, strips, eps)
-                    const sumGap = util.sum(ps.map(([,gap]) => gap))
-                    if (placements.fields == null || ps.length > placements.fields.length ||
-                        ps.length == placements.fields.length && sumGap < placements.fields.sumGap) {
-                        placements.fields = ps.map(([p]) => new geom.Placement(field, p, cc.angle, cc.cos))
-                        placements.fields.strips = strips
-                        placements.fields.sumGap = sumGap
-                    }
-                }
-            }
-            // const svg = new util.SVGPrinter(cc.position)
-            cc.metals.forEach(e => svg.rect(e.rect))
-            cc.stones.forEach(e => svg.rect(e.rect))
-            cc.structures.forEach(e => e.obstructions(0).forEach(rect => svg.rect(rect)))
-            cc.trees.forEach(e => svg.rect(e.rect, "green"))
-            cc.fruits.forEach(e => svg.rect(e.rect, "red"))
-            svg.rect(cc.rect)
-            placements.fields.strips.forEach(([strip]) => strip.rects().map(rect => svg.rect(rect, "blue", 0.5)))
-            placements.fields.forEach(p => svg.rect(geom.Rect.fromCenter(p.position, field.size, cc.angle, cc.cos, 0), "yellow", 0.5))
+            // const svg = new util.SVGPrinter()
+            // placements.fields = geom.fieldPlacements(mockDropsite, mockObstructions, mockField, svg)
+            //     .map(pos => new geom.Placement(field, pos, cc.angle, cc.cos))
             svg.print()
             continue
 
@@ -223,7 +211,7 @@ const mockField = {
             // can be ignored.
             const treeObstructions = cc.trees.map(tree => tree.obstruction(eps))
                                        .filter(obs => placements.fields.every(p =>
-                                           obs.disjoint(geom.Rect.fromCenter(p, [fieldWidth, fieldWidth], cc.angle, cc.cos, eps))))
+                                           obs.disjoint(geom.Rect.fromCenter(p, field.size.map(x => x + 0.05), cc.angle, cc.cos, 0))))
 
             const house = this.player.templateCache.getOrLoad(`structures/${this.civ}/house`)
             const barracks = this.player.templateCache.getOrLoad(`structures/${this.civ}/barracks`)
